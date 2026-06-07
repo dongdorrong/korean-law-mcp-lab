@@ -1,0 +1,13 @@
+# Local upstream clones and generated dependency/build artifacts
+upstreams/
+
+# Environment files with API keys
+.env
+*.env
+!examples/*.env.example
+
+# OS/editor noise
+.DS_Store
+.idea/
+.vscode/
+
