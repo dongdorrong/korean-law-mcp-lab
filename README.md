@@ -6,6 +6,30 @@
 
 > 주의: 이 저장소의 결과물은 개발/리서치 실습용입니다. 실제 법률 판단이나 사건 대응에는 최신 원문 확인과 전문가 검토가 필요합니다.
 
+## fordongdorrong 사전 연동
+
+`fordongdorrong` repository를 건드리지 않고, 이 랩 안에서 RAG/SQLite importer가 읽을 수 있는 산출물을 만듭니다. API 키 유무와 관계없이 동작합니다.
+
+```bash
+cd /home/dongdorrong/github/private/korean-law-mcp-lab
+python3 scripts/export_fordongdorrong_backend.py --print-summary
+```
+
+생성 산출물:
+
+| Path | 용도 |
+| --- | --- |
+| `exports/knowledge/korean-law.jsonl` | RAG/Knowledge Store import용 조문 단위 JSONL |
+| `exports/sqlite/korean-law.db` | SQLite importer/FTS 검색용 DB |
+| `exports/integration/korean-law-backend.manifest.json` | local export와 optional live MCP 연결 manifest |
+
+동작 모드:
+
+- `LAW_OC` 없음: 로컬 `legalize-kr` Markdown snapshot 기반 JSONL/SQLite만 사용.
+- `LAW_OC` 있음: 같은 JSONL/SQLite를 만들고, manifest에 live `korean-law-mcp` 사용 가능 상태를 표시. 키 값은 저장하지 않음.
+
+상세 계약은 [`docs/fordongdorrong-integration.md`](docs/fordongdorrong-integration.md)를 봅니다.
+
 ## 원본 저장소
 
 | 저장소 | 로컬 경로 | 역할 |
@@ -22,7 +46,12 @@ korean-law-mcp-lab/
 │   ├── repo-crawl-report.md
 │   ├── legalize-kr-guide.md
 │   ├── korean-law-mcp-guide.md
-│   └── integrated-practice.md
+│   ├── integrated-practice.md
+│   └── fordongdorrong-integration.md
+├── exports/
+│   ├── integration/
+│   ├── knowledge/
+│   └── sqlite/
 ├── examples/
 │   └── korean-law-mcp.env.example
 ├── scripts/
@@ -84,6 +113,7 @@ curl http://127.0.0.1:8765/health
 | `docs/legalize-kr-guide.md` | Git 기반 법령 데이터 실습 |
 | `docs/korean-law-mcp-guide.md` | MCP/CLI 설치, 설정, 실행 가이드 |
 | `docs/integrated-practice.md` | 두 프로젝트를 함께 쓰는 통합 실습 시나리오 |
+| `docs/fordongdorrong-integration.md` | `fordongdorrong` RAG/SQLite 연동 계약 |
 
 ## 현재 검증 상태
 
@@ -97,9 +127,11 @@ curl http://127.0.0.1:8765/health
 | CLI `list`, `help`, `explain` | 성공 |
 | CLI 실제 API 호출 | `LAW_OC` 미설정 시 명확한 오류 확인 |
 | HTTP `/health` | `{"status":"ok"}` 확인 |
+| fordongdorrong export | JSONL/SQLite/manifest 생성 확인 |
 
 ## 권장 다음 작업
 
-1. 법제처 OpenAPI 인증키를 발급받아 `LAW_OC`로 설정합니다.
-2. `docs/korean-law-mcp-guide.md`의 CLI 실습을 실제 API 호출까지 진행합니다.
-3. `docs/integrated-practice.md`의 시나리오를 따라 Git 데이터와 MCP 결과를 비교합니다.
+1. `exports/integration/korean-law-backend.manifest.json`를 `fordongdorrong` importer 계약과 대조합니다.
+2. 법제처 OpenAPI 인증키가 있으면 `LAW_OC`로 설정하고 live MCP smoke를 진행합니다.
+3. `docs/korean-law-mcp-guide.md`의 CLI 실습을 실제 API 호출까지 진행합니다.
+4. `docs/integrated-practice.md`의 시나리오를 따라 Git 데이터와 MCP 결과를 비교합니다.

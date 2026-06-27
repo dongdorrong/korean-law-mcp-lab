@@ -1,0 +1,82 @@
+{
+  "backend_id": "korean-law-mcp-lab",
+  "generated_at": "2026-06-27T11:41:16Z",
+  "purpose": "fordongdorrong backend/RAG/SQLite pre-integration contract for Korean law evidence.",
+  "local_export": {
+    "status": "ready",
+    "requires_api_key": false,
+    "source_dir": "upstreams/legalize-kr/kr",
+    "jsonl": "exports/knowledge/korean-law.jsonl",
+    "sqlite": "exports/sqlite/korean-law.db",
+    "document_count": 1695,
+    "source_commit": "874b58594654505fdc409fd42c02d100d84d51ce"
+  },
+  "live_mcp": {
+    "status": "configured",
+    "requires_api_key": true,
+    "api_key_env": "LAW_OC",
+    "api_key_configured": false,
+    "upstream_dir": "upstreams/korean-law-mcp",
+    "upstream_commit": "f71b28c992db7b1347b7cfb68695c38392339ef0",
+    "stdio": {
+      "command": "node",
+      "args": [
+        "upstreams/korean-law-mcp/build/index.js"
+      ],
+      "env": {
+        "LAW_OC": "${LAW_OC}"
+      }
+    },
+    "http": {
+      "command": "node",
+      "args": [
+        "upstreams/korean-law-mcp/build/index.js",
+        "--mode",
+        "http",
+        "--port",
+        "8765"
+      ],
+      "health": "http://127.0.0.1:8765/health",
+      "mcp": "http://127.0.0.1:8765/mcp"
+    },
+    "cli": {
+      "command": "node",
+      "args": [
+        "upstreams/korean-law-mcp/build/cli.js"
+      ]
+    }
+  },
+  "fallback_policy": {
+    "if_law_oc_missing": "Use local_export JSONL/SQLite for retrieval and display LAW_OC-required live MCP features as unavailable.",
+    "if_law_oc_present": "Use local_export as stable RAG base and optionally call live_mcp for latest search/cases/interpretations.",
+    "no_secret_persistence": true
+  },
+  "safety": {
+    "legal_advice": false,
+    "must_cite": [
+      "law_title",
+      "law_type",
+      "article_no",
+      "enforcement_date",
+      "source_path"
+    ],
+    "claim_boundary": "검색/근거 제공용 백엔드입니다. 실제 법률 판단·사건 대응은 최신 원문과 전문가 검토가 필요합니다."
+  },
+  "sqlite_schema": {
+    "documents": [
+      "source_id",
+      "document_id",
+      "title",
+      "body",
+      "uri",
+      "content_hash",
+      "created_at",
+      "updated_at",
+      "visibility",
+      "lifecycle",
+      "indexable",
+      "metadata_json"
+    ],
+    "fts": "documents_fts(title, body) when SQLite FTS5 is available"
+  }
+}
