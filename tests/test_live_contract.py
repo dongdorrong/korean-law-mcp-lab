@@ -45,6 +45,16 @@ class FakeLiveBoundaryTests(unittest.TestCase):
         self.assertEqual("000001", result["hits"][0]["law_id"])
         self.assertFalse(result["live_verified"])
 
+    def test_calendar_validity_for_promulgation_date(self):
+        fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
+        response = fixture["synthetic_response"]
+        for invalid in ("20269999", "20260229", "20261301", "00000101", "20260431"):
+            with self.subTest(date=invalid):
+                xml = response.replace("20260101", invalid)
+                self.assertEqual("schema_error", probe_search(lambda _: xml, "x")["status"])
+        leap = response.replace("20260101", "20240229")
+        self.assertEqual("response_shape_valid_offline", probe_search(lambda _: leap, "x")["status"])
+
 
 if __name__ == "__main__":
     unittest.main()

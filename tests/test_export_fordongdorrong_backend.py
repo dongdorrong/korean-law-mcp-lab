@@ -7,7 +7,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 from unittest.mock import patch
 
 from scripts.export_fordongdorrong_backend import export_backend, split_articles, split_frontmatter, verify_published
@@ -39,6 +41,43 @@ SAMPLE_LAW = """---
 
 
 class ExportFordongdorrongBackendTests(unittest.TestCase):
+    def test_journal_publish_does_not_replace_raced_owner(self) -> None:
+        from scripts import export_fordongdorrong_backend as exporter
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            journal = root / ".law-first-publish.journal.json"
+            other = b'{"owner":"other publisher"}'
+            original_link = os.link
+            def race(src, dst, **kwargs):
+                journal.write_bytes(other)
+                return original_link(src, dst, **kwargs)
+            with patch.object(exporter.os, "link", side_effect=race):
+                with self.assertRaises(FileExistsError):
+                    exporter.safe_create_json(journal, {"owner": "this publisher"}, root)
+            self.assertEqual(other, journal.read_bytes())
+
+    def test_concurrent_journal_publish_has_one_owner(self) -> None:
+        from scripts import export_fordongdorrong_backend as exporter
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            journal = root / ".law-first-publish.journal.json"
+            gate = Barrier(2)
+            original_link = os.link
+            def at_publication(src, dst, **kwargs):
+                gate.wait(timeout=5)
+                return original_link(src, dst, **kwargs)
+            def publish(owner):
+                try:
+                    exporter.safe_create_json(journal, {"owner": owner}, root)
+                    return "published"
+                except FileExistsError:
+                    return "existing"
+            with patch.object(exporter.os, "link", side_effect=at_publication):
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    results = list(pool.map(publish, ("a", "b")))
+            self.assertCountEqual(["published", "existing"], results)
+            self.assertIn(json.loads(journal.read_text())["owner"], ("a", "b"))
+
     def test_crash_during_journal_write_leaves_no_final_journal(self) -> None:
         from scripts import export_fordongdorrong_backend as exporter
         with tempfile.TemporaryDirectory() as tmp:
@@ -115,7 +154,7 @@ e.safe_create_json(pathlib.Path(os.environ['JOURNAL']), {'schema': 1}, pathlib.P
 
     def test_first_publish_interruption_has_dry_run_recovery(self) -> None:
         from scripts import export_fordongdorrong_backend as exporter
-        for fail_at in (2, 3, 4):
+        for fail_at in (1, 2, 3):
             with self.subTest(fail_at=fail_at), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 source = root / "kr/테스트법"

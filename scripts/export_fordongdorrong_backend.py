@@ -928,17 +928,18 @@ def safe_replace(source: Path, destination: Path, root: Path) -> None:
 
 
 def safe_create_json(path: Path, value: dict[str, Any], root: Path) -> None:
-    """Durably stage JSON before publishing the final journal name."""
+    """Durably stage JSON, then claim the final journal name without replacement."""
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     _safe_create_json_direct(temporary, value, root)
     try:
-        if path.exists():
-            raise FileExistsError(path)
-        safe_replace(temporary, path, root)
+        # A hard link is atomic and fails with EEXIST if another publisher won.
+        # The temp and journal live in the same directory/filesystem.
+        safe_link_new(temporary, path, root)
         sync_dir(path.parent)
     finally:
         if temporary.exists():
             safe_unlink(temporary, root)
+            sync_dir(path.parent)
 
 
 def _safe_create_json_direct(path: Path, value: dict[str, Any], root: Path) -> None:

@@ -4,6 +4,7 @@ Pinned upstream LawApiClient.searchLaw returns XML text or throws on HTTP error.
 No network client or credential handling is implemented here.
 """
 from dataclasses import dataclass
+from datetime import date as calendar_date
 import re
 from typing import Callable, Any
 from xml.etree import ElementTree
@@ -52,6 +53,8 @@ def probe_search(client: Callable[[str], str], query: str) -> dict[str, Any]:
             if (not title or not title.strip() or not law_id or not law_id.isdecimal()
                     or not mst or not mst.isdecimal() or (date and not re.fullmatch(r"\d{8}", date))):
                 raise ValueError("missing law search field")
+            if date:
+                calendar_date.fromisoformat(f"{date[:4]}-{date[4:6]}-{date[6:]}")
             hits.append({"law_title": title, "law_id": law_id, "mst": mst,
                          "promulgation_date": date or None,
                          "law_type": law.findtext("법령구분명") or None})
