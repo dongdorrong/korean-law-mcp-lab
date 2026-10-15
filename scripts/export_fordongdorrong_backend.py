@@ -95,6 +95,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--print-summary", action="store_true", help="Print compact JSON summary")
     parser.add_argument("--allow-empty", action="store_true", help="Explicitly publish an empty export")
     parser.add_argument("--migration-report", type=Path, help="Write old ordinal IDs to new logical IDs; dry-run only")
+    parser.add_argument("--previous-jsonl", type=Path, help="Required with --migration-report; prior snapshot JSONL")
     return parser.parse_args()
 
 
@@ -102,11 +103,11 @@ def main() -> None:
     args = parse_args()
     root = args.root.resolve()
     source_dir = (args.source_dir or root / "upstreams" / "legalize-kr" / "kr").resolve()
-    jsonl_path = (args.jsonl or root / "exports" / "knowledge" / "korean-law.jsonl").resolve()
-    sqlite_path = (args.sqlite or root / "exports" / "sqlite" / "korean-law.db").resolve()
+    jsonl_path = args.jsonl or root / "exports" / "knowledge" / "korean-law.jsonl"
+    sqlite_path = args.sqlite or root / "exports" / "sqlite" / "korean-law.db"
     manifest_path = (
         args.manifest or root / "exports" / "integration" / "korean-law-backend.manifest.json"
-    ).resolve()
+    )
 
     result = export_backend(
         root=root,
@@ -118,7 +119,9 @@ def main() -> None:
         allow_empty=args.allow_empty,
     )
     if args.migration_report:
-        report = migration_report(source_dir, root)
+        if args.previous_jsonl is None:
+            raise ValueError("--migration-report requires --previous-jsonl")
+        report = migration_report(source_dir, root, args.previous_jsonl)
         write_json(args.migration_report, report)
     if args.print_summary:
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -144,9 +147,9 @@ def export_backend(
         raise ValueError("Source directory must be inside root")
 
     generated_at = utc_now()
-    legalize_commit = git_commit(source_dir)
+    legalize_commit, source_diagnostic = verified_upstream_commit(root, "legalize-kr")
     mcp_dir = root / "upstreams" / "korean-law-mcp"
-    mcp_commit = git_commit(mcp_dir) if mcp_dir.exists() else None
+    mcp_commit, _ = verified_upstream_commit(root, "korean-law-mcp")
     law_oc_configured = bool(os.environ.get("LAW_OC"))
 
     documents = list(knowledge_documents(source_dir, root, generated_at, legalize_commit))
@@ -160,9 +163,16 @@ def export_backend(
         raise ValueError("Duplicate document identity; existing export was not replaced")
 
     assert_no_secret_like_payload(documents)
-    for path in (jsonl_path, sqlite_path, manifest_path):
-        if path.is_symlink() or not path.resolve().is_relative_to(root.resolve()):
-            raise ValueError("Output must be inside root and not a symlink")
+    paths = (jsonl_path, sqlite_path, manifest_path)
+    if any(path.exists() for path in paths) and not all(path.exists() for path in paths):
+        raise ValueError("Incomplete fixed-path legacy set; existing files were not changed")
+    if len({path.absolute() for path in paths}) != 3 or len({path.resolve() for path in paths}) != 3:
+        raise ValueError("JSONL, SQLite and manifest output paths must be distinct")
+    for index, path in enumerate(paths):
+        if path.exists() and any(other.exists() and os.path.samefile(path, other) for other in paths[:index]):
+            raise ValueError("JSONL, SQLite and manifest output paths must be distinct")
+    for path in paths:
+        reject_output_path(path, root)
         path.parent.mkdir(parents=True, exist_ok=True)
     stage = Path(tempfile.mkdtemp(prefix=".law-export-", dir=manifest_path.parent))
     staged_jsonl, staged_sqlite, staged_manifest = (stage / name for name in ("out.jsonl", "out.db", "manifest.json"))
@@ -189,16 +199,62 @@ def export_backend(
             "empty_explicit": not documents and allow_empty,
         }
         manifest["local_export"]["status"] = "ready" if limit == 0 else "partial_smoke_only"
+        if legalize_commit is None:
+            manifest["local_export"]["status"] = "unverified_source" if limit == 0 else "partial_unverified_source"
+        manifest["local_export"]["source_diagnostic"] = source_diagnostic
         manifest["sqlite_schema"]["fts_available"] = sqlite_fts_available(staged_sqlite)
         assert_no_secret_like_payload([manifest])
         write_json(staged_manifest, manifest)
         verify_staged(staged_jsonl, staged_sqlite, staged_manifest)
-        # Manifest is the commit point. Consumers MUST validate checksums before reading.
-        os.replace(staged_jsonl, jsonl_path)
-        os.replace(staged_sqlite, sqlite_path)
-        os.replace(staged_manifest, manifest_path)
+        for staged in (staged_jsonl, staged_sqlite, staged_manifest):
+            sync_file(staged)
+        sync_dir(stage)
+        if any(path.exists() for path in paths):
+            # Legacy fixed paths are frozen as one complete generation. New writes
+            # go to immutable files; only a single pointer is replaced.
+            generation_dir = manifest_path.parent / ".law-generations" / manifest["generation"]["id"]
+            reject_output_path(generation_dir, root)
+            manifest["local_export"]["jsonl"] = relative(generation_dir / "out.jsonl", root)
+            manifest["local_export"]["sqlite"] = relative(generation_dir / "out.db", root)
+            write_json(staged_manifest, manifest)
+            sync_file(staged_manifest)
+            sync_dir(stage)
+            if generation_dir.exists():
+                verify_staged(generation_dir / "out.jsonl", generation_dir / "out.db", generation_dir / "manifest.json")
+            else:
+                generation_dir.parent.mkdir(parents=True, exist_ok=True)
+                stage.rename(generation_dir)
+                sync_dir(generation_dir.parent)
+            pointer = manifest_path.with_suffix(".current.json")
+            reject_output_path(pointer, root)
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=pointer.parent,
+                                             prefix=".law-pointer-", delete=False) as handle:
+                json.dump({"generation_manifest": relative(generation_dir / "manifest.json", root),
+                           "generation_id": manifest["generation"]["id"]}, handle)
+                pointer_tmp = Path(handle.name)
+                handle.flush()
+                os.fsync(handle.fileno())
+            try:
+                reject_output_path(pointer, root)
+                os.replace(pointer_tmp, pointer)
+                sync_dir(pointer.parent)
+            finally:
+                pointer_tmp.unlink(missing_ok=True)
+            jsonl_path, sqlite_path, manifest_path = (generation_dir / name for name in ("out.jsonl", "out.db", "manifest.json"))
+        else:
+            # First creation cannot replace a previously complete fixed-path set.
+            for path in paths:
+                reject_output_path(path, root)
+            os.replace(staged_jsonl, jsonl_path)
+            os.replace(staged_sqlite, sqlite_path)
+            os.replace(staged_manifest, manifest_path)
+            for parent in {path.parent for path in paths}:
+                sync_dir(parent)
+        if not verify_published(jsonl_path, sqlite_path, manifest_path):
+            raise ValueError("Published generation failed validation")
     finally:
-        shutil.rmtree(stage)
+        if stage.exists():
+            shutil.rmtree(stage)
 
     return {
         "ok": True,
@@ -227,7 +283,10 @@ def iter_law_sources(source_dir: Path, root: Path) -> Iterable[LawSource]:
         if path.is_symlink() or not path.resolve().is_relative_to(source_dir.resolve()):
             raise ValueError("Source symlink/path escapes source directory")
         text = path.read_text(encoding="utf-8")
-        metadata, body = split_frontmatter(text)
+        try:
+            metadata, body = split_frontmatter(text)
+        except ValueError as exc:
+            raise ValueError(f"Malformed source {relative(path, root)}: {exc}") from exc
         if not body.strip():
             raise ValueError("Empty law document")
         relative_path = relative(path, root)
@@ -249,20 +308,24 @@ def split_frontmatter(text: str) -> tuple[dict[str, Any], str]:
 def parse_simple_yaml(raw: str) -> dict[str, Any]:
     metadata: dict[str, Any] = {}
     current_key: str | None = None
-    for line in raw.splitlines():
+    for number, line in enumerate(raw.splitlines(), 1):
         if not line.strip():
             continue
         if line.startswith("- ") and current_key:
             metadata.setdefault(current_key, [])
             if isinstance(metadata[current_key], list):
                 metadata[current_key].append(clean_scalar(line[2:].strip()))
+            else:
+                raise ValueError(f"frontmatter line {number}: list under scalar")
             continue
         if line.startswith("  ") and current_key:
-            continue
+            raise ValueError(f"frontmatter line {number}: nested YAML unsupported")
         if ":" not in line:
-            continue
+            raise ValueError(f"frontmatter line {number}: expected key: value")
         key, raw_value = line.split(":", 1)
         key = key.strip()
+        if not key or key in metadata:
+            raise ValueError(f"frontmatter line {number}: empty or duplicate key")
         value = raw_value.strip()
         current_key = key
         if not value:
@@ -284,16 +347,20 @@ def split_articles(body: str) -> list[Article]:
     starts: list[tuple[int, re.Match[str], str, str]] = []
     section_starts: list[int] = []
     section = section_key = "본문"
-    section_counts: dict[str, int] = {}
+    section_at: list[tuple[str, str]] = []
     for index, line in enumerate(lines):
         section_match = SECTION_RE.match(line)
         if section_match:
             section_starts.append(index)
             section = section_match.group(1)
-            label = section_match.group(2) or "unlabeled"
-            base = f"{section}-{label}"
-            section_counts[base] = section_counts.get(base, 0) + 1
-            section_key = f"{base}-{section_counts[base]}"
+            label = section_match.group(2)
+            if label:
+                section_key = f"{section}-{label}"
+            else:
+                end = next((i for i in range(index + 1, len(lines)) if SECTION_RE.match(lines[i])), len(lines))
+                fingerprint = hashlib.sha256("\n".join(lines[index:end]).strip().encode("utf-8")).hexdigest()[:16]
+                section_key = f"{section}-unlabeled-weak-{fingerprint}"
+        section_at.append((section, section_key))
         match = ARTICLE_HEADING_RE.match(line)
         if match:
             starts.append((index, match, section, section_key))
@@ -321,10 +388,18 @@ def split_articles(body: str) -> list[Article]:
     for start, _, _, _ in starts:
         end = next((i for i in sorted([s for s, _, _, _ in starts] + section_starts) if i > start), len(lines))
         covered.update(range(start, end))
-    if any(line.strip() and i not in covered for i, line in enumerate(lines)):
-        extras = "\n".join(line for i, line in enumerate(lines) if i not in covered).strip()
+    extra_by_section: dict[str, list[str]] = {}
+    extra_section_kind: dict[str, str] = {}
+    for index, line in enumerate(lines):
+        if index not in covered:
+            kind, key = section_at[index]
+            extra_by_section.setdefault(key, []).append(line)
+            extra_section_kind[key] = kind
+    for key, extra_lines in extra_by_section.items():
+        extras = "\n".join(extra_lines).strip()
         if extras:
-            articles.append(Article("문서", "비조문", "비조문 자료", extras, 0, "비조문", "비조문"))
+            articles.append(Article("문서", "비조문", "비조문 자료", extras, 0,
+                                    extra_section_kind[key], f"{key}-비조문"))
     return articles
 
 
@@ -353,6 +428,7 @@ def knowledge_document(law: LawSource, article: Article, generated_at: str, comm
     content_hash = "sha256:" + hashlib.sha256(body.encode("utf-8")).hexdigest()
     promulgation = date_to_iso(str(law.metadata.get("공포일자") or ""))
     enforcement = date_to_iso(str(law.metadata.get("시행일자") or ""))
+    source_modified = date_to_iso(str(law.metadata.get("원본변경일") or ""))
     if enforcement is None:
         temporal_relation = "unknown"
     elif enforcement[:10] > generated_at[:10]:
@@ -376,7 +452,7 @@ def knowledge_document(law: LawSource, article: Article, generated_at: str, comm
         "metadata": {
             "kind": "law_article",
             "category": "korean_law",
-            "source_kind": "legalize_kr_local_markdown",
+            "source_kind": "legalize_kr_pinned_markdown" if commit else "unverified_local_markdown",
             "law_title": law_title,
             "law_type": law_type,
             "law_id": law_id,
@@ -386,22 +462,25 @@ def knowledge_document(law: LawSource, article: Article, generated_at: str, comm
             "article_ordinal": article.ordinal,
             "section": article.section,
             "section_identity": article.section_key,
-            "identity_strength": "official_law_id" if law_id else "path_fallback_weak",
+            "identity_strength": "section_content_weak" if "unlabeled-weak" in article.section_key else (
+                "official_law_id" if law_id else "path_fallback_weak"),
             "revision": content_hash,
             "ministry": as_list(law.metadata.get("소관부처")),
             "promulgation_date": promulgation[:10] if promulgation else None,
             "enforcement_date": enforcement[:10] if enforcement else None,
             "observed_at": generated_at,
+            "source_modified_at": source_modified,
+            "source_modified_origin": "source_frontmatter_unverified" if source_modified else "unknown",
             "live_verified_at": None,
             "status": law.metadata.get("상태"),
             "source_path": law.relative_path,
             "upstream_commit": commit,
             "verification_status": "unverified",
             "evidence_kind": "snapshot",
-            "freshness_status": "observed_unverified",
+            "freshness_status": classify_freshness(generated_at, source_modified),
             "temporal_relation": temporal_relation,
             "legal_effect_status": "not_determined",
-            "metadata_source": "legalize-kr.git.markdown",
+            "metadata_source": "legalize-kr.git.markdown" if commit else "local_unverified_markdown",
             "legal_advice": False,
             "fordongdorrong_use_cases": [
                 "legal citation grounding",
@@ -409,7 +488,7 @@ def knowledge_document(law: LawSource, article: Article, generated_at: str, comm
                 "law-aware RAG retrieval",
             ],
             "source_evidence": {
-                "source": "legalize-kr sparse checkout",
+                "source": "legalize-kr verified pinned checkout" if commit else "unverified local markdown",
                 "path": law.relative_path,
                 "commit": commit,
                 "claim_boundary": "법령 원문 snapshot 검색용 근거입니다. 최신성·법률 판단은 법제처 원문/MCP 및 전문가 검토로 확인해야 합니다.",
@@ -429,19 +508,26 @@ def stable_document_id(relative_path: str, article: Article, law_id: str = "", l
     return f"legalize-kr/{slug}#{section_slug}/{article_slug}"
 
 
-def migration_report(source_dir: Path, root: Path) -> dict[str, Any]:
+def migration_report(source_dir: Path, root: Path, previous_jsonl: Path) -> dict[str, Any]:
     """Inventory mapping only; never touches a consumer DB or previous export."""
-    mappings = []
-    for law in iter_law_sources(source_dir, root):
-        for article in split_articles(law.body):
-            old = stable_document_id(law.relative_path, article).split("#", 1)[0]
-            article_slug = re.sub(r"[^0-9A-Za-z가-힣_.()-]+", "-", article.article_no).strip("-")
-            mappings.append({"old_id": f"{old}#{article_slug}-{article.ordinal:04d}",
-                             "new_id": stable_document_id(law.relative_path, article,
-                                                          str(law.metadata.get("법령ID") or ""),
-                                                          str(law.metadata.get("법령구분") or law.path.stem))})
+    commit, _ = verified_upstream_commit(root, "legalize-kr")
+    current = list(knowledge_documents(source_dir, root, utc_now(), commit))
+    mappings, unresolved = [], []
+    for line in previous_jsonl.read_text(encoding="utf-8").splitlines():
+        old = json.loads(line)
+        meta = old.get("metadata", {})
+        candidates = [doc for doc in current if
+                      doc["metadata"]["source_path"] == meta.get("source_path") and
+                      doc["metadata"]["article_no"] == meta.get("article_no") and
+                      (not meta.get("article_title") or doc["metadata"]["article_title"] == meta["article_title"])]
+        if len(candidates) == 1:
+            mappings.append({"old_id": old["document_id"], "new_id": candidates[0]["document_id"]})
+        else:
+            unresolved.append({"old_id": old.get("document_id"), "reason": "missing_or_ambiguous_identity",
+                               "candidate_count": len(candidates)})
     return {"dry_run": True, "mapping_count": len(mappings), "mappings": mappings,
-            "warning": "Ordinal IDs may differ if upstream content changed; review against prior export before applying."}
+            "unresolved": unresolved, "safe_to_apply_automatically": False,
+            "warning": "Mappings use the supplied prior export, never current ordinal assumptions; review manually."}
 
 
 def build_manifest(
@@ -618,6 +704,27 @@ def git_commit(path: Path) -> str | None:
     return result.stdout.strip() or None
 
 
+def verified_upstream_commit(root: Path, name: str) -> tuple[str | None, str]:
+    """Never infer upstream provenance from Git's parent-directory discovery."""
+    target = root / "upstreams" / name
+    lock_path = Path(__file__).resolve().parents[1] / "upstreams.lock.json"
+    lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    spec = next(item for item in lock["upstreams"] if item["name"] == name)
+    if not (target / ".git").exists():
+        return None, "pinned upstream checkout absent"
+    try:
+        top = subprocess.run(["git", "-C", str(target), "rev-parse", "--show-toplevel"],
+                             check=True, capture_output=True, text=True).stdout.strip()
+        remote = subprocess.run(["git", "-C", str(target), "remote", "get-url", "origin"],
+                                check=True, capture_output=True, text=True).stdout.strip()
+        commit = git_commit(target)
+    except subprocess.CalledProcessError:
+        return None, "upstream Git metadata unavailable"
+    if Path(top).resolve() != target.resolve() or remote != spec["url"] or commit != spec["commit"]:
+        return None, "upstream checkout differs from pinned provenance"
+    return commit, "pinned checkout verified"
+
+
 def date_to_iso(value: str) -> str | None:
     if not re.match(r"^\d{4}-\d{2}-\d{2}$", value):
         return None
@@ -628,12 +735,24 @@ def date_to_iso(value: str) -> str | None:
     return f"{value}T00:00:00+09:00"
 
 
+def classify_freshness(observed_at: str, source_modified_at: str | None,
+                       *, stale_after_days: int | None = None, conflicting: bool = False) -> str:
+    """Data freshness only; never a conclusion about legal validity."""
+    if conflicting:
+        return "conflicting_source"
+    if stale_after_days is not None and source_modified_at is not None:
+        from datetime import timedelta
+        if datetime.fromisoformat(observed_at.replace("Z", "+00:00")) - datetime.fromisoformat(source_modified_at) > timedelta(days=stale_after_days):
+            return "stale_by_explicit_policy"
+    return "observed_unverified"
+
+
 def sqlite_fts_available(path: Path) -> bool:
     with sqlite3.connect(path) as conn:
         return conn.execute("SELECT 1 FROM sqlite_master WHERE name='documents_fts'").fetchone() is not None
 
 
-def verify_staged(jsonl: Path, sqlite: Path, manifest: Path) -> None:
+def verify_staged(jsonl: Path, sqlite: Path, manifest: Path) -> bool:
     meta = json.loads(manifest.read_text(encoding="utf-8"))
     docs = [json.loads(line) for line in jsonl.read_text(encoding="utf-8").splitlines()]
     with sqlite3.connect(sqlite) as conn:
@@ -647,6 +766,7 @@ def verify_staged(jsonl: Path, sqlite: Path, manifest: Path) -> None:
     for path, field in ((jsonl, "jsonl_sha256"), (sqlite, "sqlite_sha256")):
         if hashlib.sha256(path.read_bytes()).hexdigest() != meta["generation"][field]:
             raise ValueError("Export checksum mismatch")
+    return True
 
 
 def verify_published(jsonl: Path, sqlite: Path, manifest: Path) -> bool:
@@ -656,6 +776,45 @@ def verify_published(jsonl: Path, sqlite: Path, manifest: Path) -> bool:
     except (OSError, ValueError, KeyError, sqlite3.DatabaseError, json.JSONDecodeError):
         return False
     return True
+
+
+def reject_output_path(path: Path, root: Path) -> None:
+    root = root.resolve()
+    absolute = path.absolute()
+    if not absolute.is_relative_to(root) or not absolute.resolve().is_relative_to(root):
+        raise ValueError("Output must be inside root")
+    current = absolute
+    while current != root:
+        if current.is_symlink():
+            raise ValueError("Output symlink component forbidden")
+        current = current.parent
+
+
+def sync_file(path: Path) -> None:
+    with path.open("rb") as handle:
+        os.fsync(handle.fileno())
+
+
+def sync_dir(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def read_current_generation(root: Path, pointer: Path) -> list[dict[str, Any]]:
+    """Pin one immutable generation before reading; never mix fixed-path opens."""
+    pinned = json.loads(pointer.read_text(encoding="utf-8"))
+    target = root / pinned["generation_manifest"]
+    if not target.resolve().is_relative_to(root.resolve()):
+        raise ValueError("Generation pointer escapes root")
+    jsonl, sqlite = target.parent / "out.jsonl", target.parent / "out.db"
+    if not verify_published(jsonl, sqlite, target):
+        raise ValueError("Generation verification failed")
+    if json.loads(target.read_text(encoding="utf-8"))["generation"]["id"] != pinned["generation_id"]:
+        raise ValueError("Generation pointer does not match manifest")
+    return [json.loads(line) for line in jsonl.read_text(encoding="utf-8").splitlines()]
 
 
 def as_list(value: Any) -> list[str]:

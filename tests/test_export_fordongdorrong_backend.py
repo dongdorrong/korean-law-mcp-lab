@@ -37,6 +37,51 @@ SAMPLE_LAW = """---
 
 
 class ExportFordongdorrongBackendTests(unittest.TestCase):
+    def test_cli_rejects_symlink_before_resolve(self) -> None:
+        from scripts.export_fordongdorrong_backend import main
+        import sys
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "kr/테스트법"
+            source.mkdir(parents=True)
+            (source / "법률.md").write_text(SAMPLE_LAW, encoding="utf-8")
+            outside = root / "existing.txt"
+            outside.write_text("do not replace", encoding="utf-8")
+            link = root / "out.jsonl"
+            link.symlink_to(outside)
+            argv = ["export", "--root", str(root), "--source-dir", str(source.parent),
+                    "--jsonl", str(link), "--sqlite", str(root / "out.db"),
+                    "--manifest", str(root / "manifest.json")]
+            with patch.object(sys, "argv", argv):
+                with self.assertRaises(ValueError):
+                    main()
+            self.assertEqual("do not replace", outside.read_text(encoding="utf-8"))
+
+    def test_output_alias_is_rejected_before_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "kr/테스트법"
+            source.mkdir(parents=True)
+            (source / "법률.md").write_text(SAMPLE_LAW, encoding="utf-8")
+            alias = root / "out"
+            with self.assertRaisesRegex(ValueError, "distinct"):
+                export_backend(root=root, source_dir=source.parent, jsonl_path=alias,
+                               sqlite_path=root / "out.db", manifest_path=alias)
+            self.assertFalse(alias.exists())
+
+    def test_parent_directory_symlink_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "kr/테스트법"
+            source.mkdir(parents=True)
+            (source / "법률.md").write_text(SAMPLE_LAW, encoding="utf-8")
+            (root / "actual").mkdir()
+            (root / "alias").symlink_to(root / "actual", target_is_directory=True)
+            with self.assertRaises(ValueError):
+                export_backend(root=root, source_dir=source.parent, jsonl_path=root / "alias/out.jsonl",
+                               sqlite_path=root / "out.db", manifest_path=root / "manifest.json")
+            self.assertEqual([], list((root / "actual").iterdir()))
+
     def test_manifest_checksum_rejects_interrupted_generation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -64,17 +109,69 @@ class ExportFordongdorrongBackendTests(unittest.TestCase):
             exporter.export_backend(**args)
             path.write_text(SAMPLE_LAW.replace("검색 가능한 근거", "변경된 근거"), encoding="utf-8")
             original_replace = os.replace
-            calls = 0
-            def fail_second(src, dst):
-                nonlocal calls
-                calls += 1
-                if calls == 2:
+            def fail_pointer(src, dst):
+                if str(dst).endswith(".current.json"):
                     raise OSError("injected publish interruption")
                 return original_replace(src, dst)
-            with patch.object(exporter.os, "replace", side_effect=fail_second):
+            with patch.object(exporter.os, "replace", side_effect=fail_pointer):
                 with self.assertRaisesRegex(OSError, "interruption"):
                     exporter.export_backend(**args)
-            self.assertFalse(verify_published(*paths))
+            self.assertTrue(verify_published(*paths))
+
+    def test_generation_pointer_reader_sees_one_coherent_version(self) -> None:
+        from scripts.export_fordongdorrong_backend import read_current_generation
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "kr/테스트법"
+            source.mkdir(parents=True)
+            path = source / "법률.md"
+            args = dict(root=root, source_dir=source.parent, jsonl_path=root / "out.jsonl",
+                        sqlite_path=root / "out.db", manifest_path=root / "manifest.json")
+            for suffix in ("A", "B"):
+                path.write_text(SAMPLE_LAW + suffix, encoding="utf-8")
+                export_backend(**args)
+            pointer = root / "manifest.current.json"
+            before = read_current_generation(root, pointer)
+            path.write_text(SAMPLE_LAW + "C", encoding="utf-8")
+            export_backend(**args)
+            after = read_current_generation(root, pointer)
+            self.assertNotEqual(before[1]["content_hash"], after[1]["content_hash"])
+            self.assertTrue(verify_published(root / "out.jsonl", root / "out.db", root / "manifest.json"))
+
+    def test_concurrent_pointer_reader_never_observes_mixed_generation(self) -> None:
+        import threading
+        from scripts.export_fordongdorrong_backend import read_current_generation
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "kr/테스트법"
+            source.mkdir(parents=True)
+            path = source / "법률.md"
+            args = dict(root=root, source_dir=source.parent, jsonl_path=root / "out.jsonl",
+                        sqlite_path=root / "out.db", manifest_path=root / "manifest.json")
+            path.write_text(SAMPLE_LAW + "A", encoding="utf-8")
+            export_backend(**args)
+            path.write_text(SAMPLE_LAW + "B", encoding="utf-8")
+            export_backend(**args)
+            pointer = root / "manifest.current.json"
+            errors = []
+            started = threading.Event()
+            def reader():
+                started.set()
+                for _ in range(100):
+                    try:
+                        docs = read_current_generation(root, pointer)
+                        if len(docs) != 3:
+                            errors.append("unexpected document count")
+                    except Exception as exc:
+                        errors.append(str(exc))
+            thread = threading.Thread(target=reader)
+            thread.start()
+            started.wait()
+            for suffix in ("C", "D", "E"):
+                path.write_text(SAMPLE_LAW + suffix, encoding="utf-8")
+                export_backend(**args)
+            thread.join()
+            self.assertEqual([], errors)
 
     def test_limit_is_partial_and_duplicate_source_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -87,7 +184,7 @@ class ExportFordongdorrongBackendTests(unittest.TestCase):
                            sqlite_path=paths[1], manifest_path=paths[2], limit=1)
             manifest = json.loads(paths[2].read_text(encoding="utf-8"))
             self.assertFalse(manifest["generation"]["complete_snapshot"])
-            self.assertEqual("partial_smoke_only", manifest["local_export"]["status"])
+            self.assertEqual("partial_unverified_source", manifest["local_export"]["status"])
             (source / "법률.md").write_text(SAMPLE_LAW.replace("##### 제2조", "##### 제1조"), encoding="utf-8")
             with self.assertRaises(ValueError):
                 export_backend(root=root, source_dir=source.parent, jsonl_path=paths[0],
@@ -116,9 +213,39 @@ class ExportFordongdorrongBackendTests(unittest.TestCase):
             source.mkdir(parents=True)
             (source / "법률.md").write_text(SAMPLE_LAW + "\n## 부칙 <2026-1>\n##### 제1조 (시행)\nA\n## 부칙 <2026-2>\n##### 제1조 (시행)\nB\n", encoding="utf-8")
             docs = list(knowledge_documents(source.parent, root, "2026-10-15T00:00:00Z", None))
-            supplements = [doc for doc in docs if doc["metadata"]["section"] == "부칙"]
+            supplements = [doc for doc in docs if doc["metadata"]["section"] == "부칙" and doc["metadata"]["article_no"] == "제1조"]
             self.assertEqual(2, len(supplements))
             self.assertNotEqual(supplements[0]["document_id"], supplements[1]["document_id"])
+
+    def test_two_nonarticle_annexes_remain_distinct(self) -> None:
+        from scripts.export_fordongdorrong_backend import knowledge_documents
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "kr/테스트법"
+            source.mkdir(parents=True)
+            (source / "법률.md").write_text(SAMPLE_LAW + "\n## 별표 <1>\n첫째 표\n## 별표 <2>\n둘째 표\n", encoding="utf-8")
+            docs = list(knowledge_documents(source.parent, root, "2026-10-15T00:00:00Z", None))
+            annexes = [doc for doc in docs if doc["metadata"]["section"] == "별표"]
+            self.assertEqual(2, len(annexes))
+            self.assertNotEqual(annexes[0]["document_id"], annexes[1]["document_id"])
+            self.assertIn("첫째 표", annexes[0]["body"])
+            self.assertIn("둘째 표", annexes[1]["body"])
+
+    def test_unlabeled_supplements_stable_under_reorder_but_weak(self) -> None:
+        from scripts.export_fordongdorrong_backend import knowledge_documents
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "kr/테스트법"
+            source.mkdir(parents=True)
+            a, b = "## 부칙\n##### 제1조 (A)\nA text\n", "## 부칙\n##### 제1조 (B)\nB text\n"
+            path = source / "법률.md"
+            path.write_text(a + b, encoding="utf-8")
+            first = {d["metadata"]["article_title"]: d for d in knowledge_documents(source.parent, root, "2026-01-01T00:00:00Z", None) if d["metadata"]["article_no"] == "제1조"}
+            path.write_text(b + a, encoding="utf-8")
+            second = {d["metadata"]["article_title"]: d for d in knowledge_documents(source.parent, root, "2026-01-01T00:00:00Z", None) if d["metadata"]["article_no"] == "제1조"}
+            for key in ("A", "B"):
+                self.assertEqual(first[key]["document_id"], second[key]["document_id"])
+                self.assertEqual("section_content_weak", second[key]["metadata"]["identity_strength"])
 
     def test_future_date_is_not_law_validity_and_source_conflict_rejected(self) -> None:
         from scripts.export_fordongdorrong_backend import knowledge_documents
@@ -135,6 +262,23 @@ class ExportFordongdorrongBackendTests(unittest.TestCase):
                 export_backend(root=root, source_dir=source.parent, jsonl_path=root / "out.jsonl",
                                sqlite_path=root / "out.db", manifest_path=root / "manifest.json")
 
+    def test_freshness_states_are_explicit_policy_not_legal_effect(self) -> None:
+        from scripts.export_fordongdorrong_backend import classify_freshness, knowledge_documents
+        observed = "2026-10-15T00:00:00Z"
+        modified = "2020-01-01T00:00:00+09:00"
+        self.assertEqual("observed_unverified", classify_freshness(observed, modified))
+        self.assertEqual("stale_by_explicit_policy", classify_freshness(observed, modified, stale_after_days=365))
+        self.assertEqual("conflicting_source", classify_freshness(observed, modified, conflicting=True))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "kr/테스트법"
+            source.mkdir(parents=True)
+            (source / "법률.md").write_text(SAMPLE_LAW.replace("상태: 시행", "상태: 폐지\n원본변경일: 2026-02-01"), encoding="utf-8")
+            doc = next(iter(knowledge_documents(source.parent, root, observed, None)))
+            self.assertEqual("2026-02-01T00:00:00+09:00", doc["metadata"]["source_modified_at"])
+            self.assertEqual("not_determined", doc["metadata"]["legal_effect_status"])
+            self.assertEqual("active", doc["lifecycle"])  # data lifecycle, not legal effect
+
     def test_missing_source_and_symlink_output_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -146,10 +290,26 @@ class ExportFordongdorrongBackendTests(unittest.TestCase):
             (source / "법률.md").write_text(SAMPLE_LAW, encoding="utf-8")
             outside = root.parent / (root.name + "-outside")
             (root / "out.jsonl").symlink_to(outside)
-            with self.assertRaisesRegex(ValueError, "symlink"):
+            with self.assertRaises(ValueError):
                 export_backend(root=root, source_dir=source.parent, jsonl_path=root / "out.jsonl",
                                sqlite_path=root / "out.db", manifest_path=root / "manifest.json")
             self.assertFalse(outside.exists())
+
+    def test_parent_git_repo_is_not_misidentified_as_legalize_source(self) -> None:
+        import subprocess
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(["git", "-C", str(root), "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-qm", "synthetic"], check=True)
+            source = root / "kr/테스트법"
+            source.mkdir(parents=True)
+            (source / "법률.md").write_text(SAMPLE_LAW, encoding="utf-8")
+            result = export_backend(root=root, source_dir=source.parent, jsonl_path=root / "out.jsonl",
+                                    sqlite_path=root / "out.db", manifest_path=root / "manifest.json")
+            self.assertIsNone(result["legalize_commit"])
+            manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual("unverified_source", manifest["local_export"]["status"])
+            self.assertIsNone(manifest["local_export"]["source_commit"])
 
     def test_empty_source_preserves_existing_export(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -195,6 +355,8 @@ class ExportFordongdorrongBackendTests(unittest.TestCase):
         self.assertIn("제1조", body)
         with self.assertRaisesRegex(ValueError, "Malformed"):
             split_frontmatter("---\n제목: 미완료\n##### 제1조 본문")
+        with self.assertRaisesRegex(ValueError, "frontmatter line 2"):
+            split_frontmatter("---\n제목: 법\n잘못된 행\n---\n본문")
         articles = split_articles("##### 제1조 (목적)\n본문\n## 별표 <별표1>\n표 내용")
         self.assertEqual("##### 제1조 (목적)\n본문", articles[0].body)
         self.assertTrue(any("표 내용" in article.body for article in articles))
@@ -206,10 +368,20 @@ class ExportFordongdorrongBackendTests(unittest.TestCase):
             source = root / "upstreams/legalize-kr/kr/테스트법"
             source.mkdir(parents=True)
             (source / "법률.md").write_text(SAMPLE_LAW, encoding="utf-8")
-            report = migration_report(source.parent, root)
+            previous = root / "previous.jsonl"
+            previous.write_text(json.dumps({"document_id": "legalize-kr/kr/테스트법/법률.md#제2조-0002",
+                                           "metadata": {"article_no": "제2조", "source_path": "upstreams/legalize-kr/kr/테스트법/법률.md"}}) + "\n", encoding="utf-8")
+            (source / "법률.md").write_text(SAMPLE_LAW.replace("##### 제2조", "##### 제1조의2 (삽입)\n삽입.\n##### 제2조"), encoding="utf-8")
+            report = migration_report(source.parent, root, previous)
             self.assertTrue(report["dry_run"])
-            self.assertIn("#제1조-0001", report["mappings"][0]["old_id"])
+            self.assertEqual("legalize-kr/kr/테스트법/법률.md#제2조-0002", report["mappings"][0]["old_id"])
             self.assertIn("id/009999", report["mappings"][0]["new_id"])
+            previous.write_text(previous.read_text(encoding="utf-8") + json.dumps({
+                "document_id": "legalize-kr/kr/테스트법/법률.md#제9조-0009",
+                "metadata": {"article_no": "제9조", "source_path": "upstreams/legalize-kr/kr/테스트법/법률.md"}}) + "\n", encoding="utf-8")
+            report = migration_report(source.parent, root, previous)
+            self.assertEqual(1, len(report["unresolved"]))
+            self.assertFalse(report["safe_to_apply_automatically"])
 
     def test_export_writes_jsonl_sqlite_manifest_without_law_oc(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -257,6 +429,7 @@ class ExportFordongdorrongBackendTests(unittest.TestCase):
             self.assertFalse(manifest["local_export"]["requires_api_key"])
             self.assertTrue(manifest["live_mcp"]["requires_api_key"])
             self.assertFalse(manifest["live_mcp"]["api_key_configured"])
+            self.assertIsInstance(manifest["sqlite_schema"]["fts_available"], bool)
             self.assertEqual("Use local_export JSONL/SQLite for retrieval and display LAW_OC-required live MCP features as unavailable.", manifest["fallback_policy"]["if_law_oc_missing"])
 
     def test_manifest_detects_law_oc_without_persisting_value(self) -> None:

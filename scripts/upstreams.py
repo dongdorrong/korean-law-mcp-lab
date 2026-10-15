@@ -25,6 +25,12 @@ def prepare(root: Path, spec: dict) -> None:
             raise ValueError(f"{spec['name']}: dirty checkout")
         if git("-C", str(target), "rev-parse", "HEAD") != spec["commit"]:
             raise ValueError(f"{spec['name']}: checkout differs from lock; no automatic update")
+        shallow = git("-C", str(target), "rev-parse", "--is-shallow-repository")
+        if shallow not in {"true", "false"}:
+            raise ValueError(f"{spec['name']}: shallow state could not be determined")
+        for pattern in spec["sparse"]:
+            if not any(path.is_file() for path in target.glob(pattern)):
+                raise ValueError(f"{spec['name']}: pinned sparse path missing: {pattern}; use isolated fresh preparation")
         return
     parent = target.parent
     parent.mkdir(parents=True, exist_ok=True)
@@ -40,6 +46,9 @@ def prepare(root: Path, spec: dict) -> None:
         if spec["sparse"]:
             git("-C", str(checkout), "sparse-checkout", "set", "--no-cone", *spec["sparse"])
         git("-C", str(checkout), "checkout", "--detach", spec["commit"])
+        for pattern in spec["sparse"]:
+            if not any(path.is_file() for path in checkout.glob(pattern)):
+                raise ValueError(f"{spec['name']}: pinned sparse path missing: {pattern}")
         checkout.rename(target)
 
 

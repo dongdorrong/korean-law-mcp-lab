@@ -22,6 +22,6 @@ with tempfile.TemporaryDirectory() as tmp:
     export_backend(root=root, source_dir=source.parent, jsonl_path=paths[0], sqlite_path=paths[1], manifest_path=paths[2])
     assert verify_published(*paths)
     report = reconcile(paths[0], json.loads(CONTRACT.read_text(encoding='utf-8')))
-    assert not report['compatible'] and all(v['code'] == 'SOURCE_ID_NOT_ALLOWED' for v in report['violations'])
+    assert not report['compatible'] and all(v['code'] == 'source_id: invalid enum' for v in report['violations'])
     print('synthetic export: validated; central source_id gate: blocked as expected')
 PY

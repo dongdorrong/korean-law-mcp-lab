@@ -1,12 +1,58 @@
-# Repo-local work and deferred gates
+# TODO — fordongdorrong 연동 후속 작업
 
-2026-10-15 작업 범위·검증은 `docs/completion-ledger.md`를 참조하십시오. Offline exporter, pinned upstream 준비, 논리 ID와 dry-run migration, 날짜/검증 상태, manifest checksum, synthetic reconciliation은 구현되었습니다. Live API 호출과 중앙 import는 실행하지 않았습니다.
+작성일: 2026-06-27
 
-남은 gate:
-- 중앙 Knowledge v1 source_id enum에 법령 source를 등록할지 중앙 소유자 결정 및 새 schema 계약 검증.
-- `legalize-kr` 라이선스/재배포 범위와 과거 pinned commit 가용성 검증.
-- LAW_OC 사용 승인 뒤 인증·rate-limit·timeout·응답 schema·live 최신성 비교를 별도 실행.
-- 중앙 답변 guard, 지원 adapter 승격, sparse 법령 분야 확장, 과거 개정 전체 이력 export는 별도 제품 범위.
-- 새 CI runner/과금 승인 전에는 `scripts/verify.sh`만 로컬 실행. 비활성 초안: `docs/ci-workflow-draft.md`.
+## 현재 완료
 
-검증: `./scripts/verify.sh` (실데이터/키/네트워크 불필요).
+- `quant`는 이번 범위에서 제외.
+- `korean-law-mcp-lab`에 `fordongdorrong` 사전 연동용 export 스크립트 추가.
+- API 키가 없어도 `legalize-kr` 로컬 Markdown snapshot을 조문 단위 Knowledge JSONL/SQLite로 export.
+- API 키가 있으면 `LAW_OC` 값을 저장하지 않고 manifest에 live MCP 사용 가능 상태만 표시.
+- SQLite `documents` 테이블과 가능한 경우 FTS5 `documents_fts` 생성.
+- 안전 경계: 법률 자문 아님, 최신성/사건 판단은 법제처 원문·MCP·전문가 검토 필요.
+
+## 다음 작업
+
+1. `fordongdorrong` 쪽 importer 계약 확인
+   - JSONL ingest가 있는지
+   - SQLite `documents` 테이블을 읽는지
+   - RAG metadata filter 이름이 맞는지
+2. `fordongdorrong` 답변 guard 설계
+   - `law_title`, `law_type`, `article_no`, `enforcement_date`, `source_path` citation 강제
+   - `legal_advice=false`를 system/policy guard에 반영
+3. `LAW_OC` 발급 후 live MCP smoke
+   - `node build/index.js --mode http --port 8765`
+   - `/health` 확인
+   - 대표 질의 `search_law`, `verify_citations`, `impact_map` 확인
+4. 로컬 export와 live MCP 병합 전략
+   - 기본 검색: SQLite/JSONL
+   - 최신성/판례/해석례 확장: live MCP
+   - live 실패 시 local-only fallback
+5. sparse checkout 확장 후보
+   - 상법
+   - 형법
+   - 민사소송법
+   - 전자상거래법/개인정보보호 관련 하위 법령
+6. export 품질 개선 후보
+   - 조문 제목 정규화
+   - 부칙 별도 chunking
+   - 별표/서식 metadata 처리
+   - 개정 이력 document 추가
+
+## 검증 명령
+
+```bash
+python3 -m compileall -q scripts
+python3 -m unittest discover -s tests
+python3 scripts/export_fordongdorrong_backend.py --print-summary
+python3 - <<'PY'
+import json, sqlite3
+print(json.loads(open('exports/integration/korean-law-backend.manifest.json', encoding='utf-8').read())['backend_id'])
+with sqlite3.connect('exports/sqlite/korean-law.db') as conn:
+    print(conn.execute('select count(*) from documents').fetchone()[0])
+PY
+```
+
+## 2026-10-15 상태 업데이트
+
+위 목록은 원래 후속 과업을 보존한 것입니다. 각 항목의 실제 구현/검증/결정/잔여 상태는 `docs/completion-ledger.md`의 세부 행을 참조하십시오. `scripts/verify.sh`는 offline 합성 fixture만 사용합니다. 중앙 source 등록, live LAW_OC, 지원 adapter 승격, 실 DB migration, 새 CI 실행 환경은 아직 완료/활성화하지 않았습니다.
