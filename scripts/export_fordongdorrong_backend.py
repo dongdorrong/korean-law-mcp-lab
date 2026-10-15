@@ -24,6 +24,7 @@ import sqlite3
 import subprocess
 import tempfile
 import shutil
+import uuid
 from urllib.parse import quote
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -826,7 +827,7 @@ def verify_fixed_baseline(jsonl: Path, sqlite: Path, manifest: Path) -> bool:
 
 def recover_first_publish(root: Path, source_dir: Path, jsonl_path: Path, sqlite_path: Path,
                           manifest_path: Path, *, apply: bool = False) -> dict[str, Any]:
-    """Report or clear only journal-proven newly created partial files; never old data."""
+    """Inspect or quarantine journal-proven first-publish partials; never delete old data."""
     del source_dir
     paths = (jsonl_path, sqlite_path, manifest_path)
     journal = manifest_path.parent / ".law-first-publish.journal.json"
@@ -834,8 +835,21 @@ def recover_first_publish(root: Path, source_dir: Path, jsonl_path: Path, sqlite
     if not journal.is_file():
         return {"recoverable": False, "reason": "no first-publish journal", "dry_run": not apply}
     try:
-        record = json.loads(journal.read_text(encoding="utf-8"))
-        if record.get("schema") != 1 or record.get("paths") != [relative(path, root) for path in paths]:
+        try:
+            record = json.loads(journal.read_text(encoding="utf-8"))
+        except (UnicodeError, json.JSONDecodeError):
+            if any(path.exists() or path.is_symlink() for path in paths):
+                raise ValueError("malformed journal with outputs requires manual review")
+            quarantined = None
+            if apply:
+                quarantined = quarantine_file(journal, root)
+            return {"recoverable": True, "complete": False, "malformed_zero_output": True,
+                    "quarantine": relative(quarantined, root) if quarantined else None, "dry_run": not apply}
+        if (not isinstance(record, dict) or record.get("schema") != 1 or
+                record.get("paths") != [relative(path, root) for path in paths] or
+                not isinstance(record.get("sha256"), list) or len(record["sha256"]) != 3 or
+                any(not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)
+                    for digest in record["sha256"])):
             raise ValueError("journal does not match requested output paths")
         existing = []
         for path, digest in zip(paths, record["sha256"], strict=True):
@@ -850,9 +864,17 @@ def recover_first_publish(root: Path, source_dir: Path, jsonl_path: Path, sqlite
             return {"recoverable": True, "complete": True, "dry_run": not apply}
         if apply:
             for path in existing:
-                if hashlib.sha256(path.read_bytes()).hexdigest() != record["sha256"][paths.index(path)]:
-                    raise ValueError("partial output changed during recovery")
-                safe_unlink(path, root)
+                quarantined = quarantine_file(path, root)
+                if hashlib.sha256(quarantined.read_bytes()).hexdigest() != record["sha256"][paths.index(path)]:
+                    # Another writer changed the leaf after inspection. Restore only
+                    # without replacing anything; retain quarantine for audit.
+                    try:
+                        safe_link_new(quarantined, path, root)
+                    except FileExistsError:
+                        pass
+                    raise ValueError(f"partial output changed during recovery; preserved {relative(quarantined, root)}")
+            if any(path.exists() for path in paths):
+                raise ValueError("new output appeared during recovery; journal retained")
             safe_unlink(journal, root)
         return {"recoverable": True, "complete": False, "files": [relative(path, root) for path in existing],
                 "dry_run": not apply}
@@ -906,6 +928,20 @@ def safe_replace(source: Path, destination: Path, root: Path) -> None:
 
 
 def safe_create_json(path: Path, value: dict[str, Any], root: Path) -> None:
+    """Durably stage JSON before publishing the final journal name."""
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    _safe_create_json_direct(temporary, value, root)
+    try:
+        if path.exists():
+            raise FileExistsError(path)
+        safe_replace(temporary, path, root)
+        sync_dir(path.parent)
+    finally:
+        if temporary.exists():
+            safe_unlink(temporary, root)
+
+
+def _safe_create_json_direct(path: Path, value: dict[str, Any], root: Path) -> None:
     parent_fd = open_parent_dir(path, root)
     try:
         descriptor = os.open(path.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
@@ -928,6 +964,27 @@ def safe_unlink(path: Path, root: Path) -> None:
         os.unlink(path.name, dir_fd=parent_fd)
     finally:
         os.close(parent_fd)
+
+
+def quarantine_file(path: Path, root: Path) -> Path:
+    """Move a leaf to a unique same-directory audit path; never unlink unknown bytes."""
+    destination = path.with_name(f".law-recovery-{uuid.uuid4().hex}-{path.name.lstrip('.')}")
+    safe_replace(path, destination, root)
+    sync_dir(path.parent)
+    return destination
+
+
+def safe_link_new(source: Path, destination: Path, root: Path) -> None:
+    source_fd = open_parent_dir(source, root)
+    try:
+        destination_fd = open_parent_dir(destination, root)
+        try:
+            os.link(source.name, destination.name, src_dir_fd=source_fd,
+                    dst_dir_fd=destination_fd, follow_symlinks=False)
+        finally:
+            os.close(destination_fd)
+    finally:
+        os.close(source_fd)
 
 
 def sync_file(path: Path) -> None:

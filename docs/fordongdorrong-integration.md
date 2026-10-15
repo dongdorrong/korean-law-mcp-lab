@@ -154,3 +154,5 @@ documents(
 첫 생성 후 고정 경로는 이전 완전 세대로 고정됩니다. 새로운 immutable 세대는 manifest와 JSONL/SQLite checksum을 갖고 `.current.json` 포인터 하나로 커밋됩니다. 새 소비자는 `read_current_generation(root, pointer)`를 사용해야 하며, 기존 고정 경로 소비자는 새 세대로 자동 이동하지 않습니다. 첫 생성에서 산출물이 없고 쓰기가 중단되면 manifest 검증으로 거절합니다. API 키 존재·build·health·인증·법령 조회 성공은 서로 다른 상태입니다. 실제 live API 검증과 중앙 통합은 이번에 수행하지 않았습니다.
 
 첫 발행 중단은 journal에 의해 명시적으로 격리하고 `recover_first_publish()` dry-run으로 점검합니다. 기존 고정 triplet은 새로운 checksum manifest이면 hash까지, 구형 manifest이면 문서 개수와 JSONL/SQLite ID·본문 hash·metadata parity를 검증한 뒤에만 안전한 기존 기준선으로 취급합니다. 누락·불일치·partial이면 새 발행을 거절합니다. `--limit`/명시적 빈 결과는 immutable smoke 산출물일 뿐 고정 기준선을 만들지 않습니다. generation ID는 데이터 hash와 manifest 의미를 함께 반영합니다. 검증용 SQLite는 read-only URI로만 엽니다.
+
+journal은 임시 파일 완전 기록·fsync 후 원자적으로 이름을 발행합니다. 이전 버전의 잘린 journal은 출력이 전혀 없는 경우에만 격리할 수 있습니다. 부분 출력 복구 시 leaf를 고유 `.law-recovery-*` 감사 경로로 옮긴 후 그 파일의 SHA를 확인하므로 교체된 알 수 없는 내용을 삭제하지 않습니다. 충돌 시 journal과 감사 파일을 남기며, 복원은 기존 경로가 비어 있을 때만 수행합니다. 동일 고정 경로의 독립적 세 번 열기를 하나의 원자적 읽기로 보장하지 않으므로 기존 소비자는 완전한 이전 세대를 유지하거나 세대 포인터를 고정해 읽어야 합니다.

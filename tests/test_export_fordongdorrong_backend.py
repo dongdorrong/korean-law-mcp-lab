@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -37,6 +39,73 @@ SAMPLE_LAW = """---
 
 
 class ExportFordongdorrongBackendTests(unittest.TestCase):
+    def test_crash_during_journal_write_leaves_no_final_journal(self) -> None:
+        from scripts import export_fordongdorrong_backend as exporter
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            code = """import os, pathlib
+from scripts import export_fordongdorrong_backend as e
+def die(value, handle, *args, **kwargs):
+    handle.write('{'); handle.flush(); os.fsync(handle.fileno()); os._exit(17)
+e.json.dump = die
+e.safe_create_json(pathlib.Path(os.environ['JOURNAL']), {'schema': 1}, pathlib.Path(os.environ['ROOT']))
+"""
+            journal = root / ".law-first-publish.journal.json"
+            result = subprocess.run([sys.executable, "-c", code], cwd=Path(__file__).resolve().parents[1],
+                                    env={**os.environ, "ROOT": str(root), "JOURNAL": str(journal)})
+            self.assertEqual(17, result.returncode)
+            self.assertFalse(journal.exists())
+            source = root / "kr/테스트법"
+            source.mkdir(parents=True)
+            (source / "법률.md").write_text(SAMPLE_LAW, encoding="utf-8")
+            exporter.export_backend(root=root, source_dir=source.parent, jsonl_path=root / "out.jsonl",
+                                    sqlite_path=root / "out.db", manifest_path=root / "manifest.json")
+            self.assertTrue(verify_published(root / "out.jsonl", root / "out.db", root / "manifest.json"))
+
+    def test_malformed_zero_output_journal_can_be_quarantined(self) -> None:
+        from scripts import export_fordongdorrong_backend as exporter
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            journal = root / ".law-first-publish.journal.json"
+            journal.write_text("{", encoding="utf-8")
+            args = (root, root, root / "out.jsonl", root / "out.db", root / "manifest.json")
+            self.assertTrue(exporter.recover_first_publish(*args)["recoverable"])
+            self.assertTrue(exporter.recover_first_publish(*args, apply=True)["recoverable"])
+            self.assertFalse(journal.exists())
+            self.assertEqual("{", next(root.glob(".law-recovery-*.journal.json")).read_text())
+
+    def test_recovery_preserves_swapped_unknown_file(self) -> None:
+        from scripts import export_fordongdorrong_backend as exporter
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "kr/테스트법"
+            source.mkdir(parents=True)
+            (source / "법률.md").write_text(SAMPLE_LAW, encoding="utf-8")
+            args = dict(root=root, source_dir=source.parent, jsonl_path=root / "out.jsonl",
+                        sqlite_path=root / "out.db", manifest_path=root / "manifest.json")
+            original = os.replace
+            count = 0
+            def interrupt(src, dst, **kwargs):
+                nonlocal count
+                count += 1
+                if count == 3:
+                    raise OSError("partial")
+                return original(src, dst, **kwargs)
+            with patch.object(exporter.os, "replace", side_effect=interrupt):
+                with self.assertRaises(OSError):
+                    exporter.export_backend(**args)
+            self.assertTrue((root / "out.jsonl").exists())
+            original_safe_replace = exporter.safe_replace
+            def swap_before_move(src, dst, anchor):
+                if src == root / "out.jsonl":
+                    src.write_text("unknown-new-content", encoding="utf-8")
+                return original_safe_replace(src, dst, anchor)
+            with patch.object(exporter, "safe_replace", side_effect=swap_before_move):
+                report = exporter.recover_first_publish(*args.values(), apply=True)
+            self.assertFalse(report["recoverable"])
+            self.assertEqual("unknown-new-content", (root / "out.jsonl").read_text())
+            self.assertTrue((root / ".law-first-publish.journal.json").exists())
+
     def test_verify_missing_sqlite_does_not_create_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -46,7 +115,7 @@ class ExportFordongdorrongBackendTests(unittest.TestCase):
 
     def test_first_publish_interruption_has_dry_run_recovery(self) -> None:
         from scripts import export_fordongdorrong_backend as exporter
-        for fail_at in (1, 2, 3):
+        for fail_at in (2, 3, 4):
             with self.subTest(fail_at=fail_at), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 source = root / "kr/테스트법"

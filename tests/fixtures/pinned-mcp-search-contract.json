@@ -3,8 +3,9 @@
   "commit": "f71b28c992db7b1347b7cfb68695c38392339ef0",
   "evidence": {
     "src/lib/api-client.ts": "e556e998f0ea45f7a26dd82eed4d2c4af9dcc3f460e9a2827e0548e63463d6c8",
-    "src/tools/search.ts": "c17b5e71249bcb209edf99bd4b6a95aa3224485f2bec2ccba7b4684c704e2bae"
+    "src/tools/search.ts": "c17b5e71249bcb209edf99bd4b6a95aa3224485f2bec2ccba7b4684c704e2bae",
+    "src/lib/xml-parser.ts": "03f76de1cbb9eac9153120a13122f3b1402e07bbb028a3cf8cbc97e5777a0cff"
   },
-  "interface": "LawApiClient.searchLaw(query) returns XML string; search.ts parses law nodes with 법령명한글, 법령ID, 법령일련번호, 공포일자, 법령구분명. Non-OK HTTP throws.",
-  "synthetic_response": "<LawSearch><law><법령명한글>합성법</법령명한글><법령ID>000001</법령ID><법령일련번호>123</법령일련번호><공포일자>20260101</공포일자><법령구분명>법률</법령구분명></law></LawSearch>"
+  "interface": "LawApiClient.searchLaw(query) returns XML string; search.ts parses law nodes with 법령명한글, 법령ID, 법령일련번호, 공포일자, 법령구분명. Shared xml-parser.ts recognizes totalCnt (and kb-utils.ts recognizes 검색결과개수); this lab adds stricter LawSearch envelope/count/error validation because upstream search.ts does not. Non-OK HTTP throws.",
+  "synthetic_response": "<LawSearch><totalCnt>1</totalCnt><law><법령명한글>합성법</법령명한글><법령ID>000001</법령ID><법령일련번호>123</법령일련번호><공포일자>20260101</공포일자><법령구분명>법률</법령구분명></law></LawSearch>"
 }
