@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "upstreams": [
+    {
+      "name": "legalize-kr",
+      "url": "https://github.com/legalize-kr/legalize-kr.git",
+      "commit": "874b58594654505fdc409fd42c02d100d84d51ce",
+      "snapshot_source": "tracked pre-integration manifest (2026-06-27)",
+      "license": "unverified; redistribution review required",
+      "sparse": ["README.md", "kr/민법/*", "kr/개인정보보호법/*", "kr/근로기준법/*"]
+    },
+    {
+      "name": "korean-law-mcp",
+      "url": "https://github.com/chrisryugj/korean-law-mcp.git",
+      "commit": "f71b28c992db7b1347b7cfb68695c38392339ef0",
+      "snapshot_source": "tracked pre-integration manifest (2026-06-27)",
+      "license": "MIT (LICENSE at pinned commit; redistribution still requires review)",
+      "sparse": []
+    }
+  ]
+}

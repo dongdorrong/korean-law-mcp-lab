@@ -7,7 +7,7 @@
 ## 로컬 위치
 
 ```bash
-cd /home/dongdorrong/github/private/korean-law-mcp-lab
+cd <repo>
 cd upstreams/legalize-kr
 ```
 

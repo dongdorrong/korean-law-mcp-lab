@@ -5,7 +5,7 @@
 ## 실습 전제
 
 ```bash
-cd /home/dongdorrong/github/private/korean-law-mcp-lab
+cd <repo>
 ```
 
 실제 MCP/CLI API 호출에는 `LAW_OC`가 필요합니다.

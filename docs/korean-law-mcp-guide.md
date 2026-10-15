@@ -7,7 +7,7 @@
 ## 로컬 위치
 
 ```bash
-cd /home/dongdorrong/github/private/korean-law-mcp-lab/upstreams/korean-law-mcp
+cd <repo>/upstreams/korean-law-mcp
 ```
 
 ## 요구사항
@@ -143,7 +143,7 @@ CORS_ORIGIN 미설정 — 모든 도메인 허용 중. 프로덕션에서는 COR
     "korean-law-local": {
       "command": "node",
       "args": [
-        "/home/dongdorrong/github/private/korean-law-mcp-lab/upstreams/korean-law-mcp/build/index.js"
+        "<repo>/upstreams/korean-law-mcp/build/index.js"
       ],
       "env": {
         "LAW_OC": "발급받은-법제처-OC-키"
