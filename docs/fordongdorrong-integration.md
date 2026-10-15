@@ -26,7 +26,7 @@ exports/
 생성 명령:
 
 ```bash
-cd /home/dongdorrong/github/private/korean-law-mcp-lab
+cd <repo>
 python3 scripts/export_fordongdorrong_backend.py --print-summary
 ```
 
@@ -65,7 +65,7 @@ python3 scripts/export_fordongdorrong_backend.py --print-summary
 live MCP 실행 예:
 
 ```bash
-cd /home/dongdorrong/github/private/korean-law-mcp-lab/upstreams/korean-law-mcp
+cd <repo>/upstreams/korean-law-mcp
 LAW_OC='발급받은-법제처-OC-키' node build/index.js --mode http --port 8765
 curl -s http://127.0.0.1:8765/health
 ```
@@ -142,3 +142,17 @@ documents(
 - 실제 법률 판단, 사건 대응, 법률 자문처럼 단정하지 않습니다.
 - 최신성·시행일·개정 여부가 중요한 질문은 법제처 원문/live MCP/전문가 검토로 재확인해야 합니다.
 - API 키, 토큰, 쿠키, 비밀번호는 export 산출물에 저장하지 않습니다.
+
+## 2026-10-15 계약 교정 (이전 예시보다 우선)
+
+위 2026-06 계약의 예시 `document_id`·`verification_status`·`updated_at`·`live_mcp.status`는 **구형 산출물의 설명**입니다. 이번 버전의 논리 ID는 법령ID/경로 fallback + section + 조문 번호를 사용하며 개정 본문 hash는 revision입니다. 기존 ordinal ID의 dry-run 대응은 `--previous-jsonl`과 `--migration-report`를 함께 사용합니다. 모호한 대응은 자동 적용하지 않습니다.
+
+중앙 `fordongdorrong` Knowledge v1 schema(commit `288246aa927dfec73db01679596b76bd2f8e4948`, SHA-256 `c0faecbdfce828f9697f1a35bc22df592aa35f60ea8381ee28df0d2825da12af`)는 현 법령 `source_id`를 허용하지 않습니다. pinned 전체 schema offline validator는 `scripts/reconcile_knowledge_contract.py`입니다. 중앙 import 호환 완료가 아니며 중앙 코드는 변경하지 않았습니다.
+
+새 JSONL의 `created_at`은 유효 공포일 또는 null, `updated_at`은 관측 시각입니다. 시행일·원본 변경일·live 검증 시각을 metadata에 분리합니다. snapshot의 `verification_status=unverified`, `live_verified_at=null`, `legal_advice=false`, `legal_effect_status=not_determined`입니다. 데이터 lifecycle=active는 법적 효력 판정이 아닙니다. `temporal_relation`은 단순 날짜 비교입니다.
+
+첫 생성 후 고정 경로는 이전 완전 세대로 고정됩니다. 새로운 immutable 세대는 manifest와 JSONL/SQLite checksum을 갖고 `.current.json` 포인터 하나로 커밋됩니다. 새 소비자는 `read_current_generation(root, pointer)`를 사용해야 하며, 기존 고정 경로 소비자는 새 세대로 자동 이동하지 않습니다. 첫 생성에서 산출물이 없고 쓰기가 중단되면 manifest 검증으로 거절합니다. API 키 존재·build·health·인증·법령 조회 성공은 서로 다른 상태입니다. 실제 live API 검증과 중앙 통합은 이번에 수행하지 않았습니다.
+
+첫 발행 중단은 journal에 의해 명시적으로 격리하고 `recover_first_publish()` dry-run으로 점검합니다. 기존 고정 triplet은 새로운 checksum manifest이면 hash까지, 구형 manifest이면 문서 개수와 JSONL/SQLite ID·본문 hash·metadata parity를 검증한 뒤에만 안전한 기존 기준선으로 취급합니다. 누락·불일치·partial이면 새 발행을 거절합니다. `--limit`/명시적 빈 결과는 immutable smoke 산출물일 뿐 고정 기준선을 만들지 않습니다. generation ID는 데이터 hash와 manifest 의미를 함께 반영합니다. 검증용 SQLite는 read-only URI로만 엽니다.
+
+journal은 임시 파일 완전 기록·fsync 후 같은 디렉터리의 하드링크로 최종 이름을 원자적·배타적으로 발행합니다. 동시 발행자는 기존 journal을 덮어쓰지 않고 실패합니다. 이전 버전의 잘린 journal은 출력이 전혀 없는 경우에만 격리할 수 있습니다. 부분 출력 복구 시 leaf를 고유 `.law-recovery-*` 감사 경로로 옮긴 후 그 파일의 SHA를 확인하므로 교체된 알 수 없는 내용을 삭제하지 않습니다. 충돌 시 journal과 감사 파일을 남기며, 복원은 기존 경로가 비어 있을 때만 수행합니다. 동일 고정 경로의 독립적 세 번 열기를 하나의 원자적 읽기로 보장하지 않으므로 기존 소비자는 완전한 이전 세대를 유지하거나 세대 포인터를 고정해 읽어야 합니다.

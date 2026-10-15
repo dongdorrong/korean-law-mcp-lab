@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fordongdorrong.local/schemas/knowledge-document.v1.schema.json",
+  "title": "Fordongdorrong Knowledge Export Document v1",
+  "description": "Canonical versioned KnowledgeDocument contract owned by fordongdorrong. knowledge-document.schema.json is kept unchanged as a compatibility alias with rule-equivalent properties, required and allOf. Versioning is carried by $id; individual JSONL lines do not carry a schema_version field so existing exports remain valid.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "source_id",
+    "document_id",
+    "title",
+    "body",
+    "uri",
+    "content_hash",
+    "created_at",
+    "updated_at",
+    "visibility",
+    "lifecycle",
+    "deleted_at",
+    "indexable",
+    "metadata"
+  ],
+  "properties": {
+    "source_id": {
+      "type": "string",
+      "enum": [
+        "velog",
+        "thing",
+        "onenote",
+        "github-stars"
+      ]
+    },
+    "document_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable ID inside the source project. Combine with source_id for a global document key."
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "body": {
+      "type": "string",
+      "description": "Plain text or markdown body after source-side redaction. Required when indexable=true and lifecycle is active/stale."
+    },
+    "uri": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Source path, internal reference, or source URL used for provenance."
+    },
+    "content_hash": {
+      "type": "string",
+      "pattern": "^sha256:[A-Fa-f0-9]{64}$"
+    },
+    "created_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "visibility": {
+      "type": "string",
+      "enum": [
+        "private",
+        "internal",
+        "public",
+        "draft"
+      ]
+    },
+    "lifecycle": {
+      "type": "string",
+      "enum": [
+        "active",
+        "stale",
+        "tombstoned"
+      ]
+    },
+    "deleted_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "indexable": {
+      "type": "boolean"
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Source-specific non-secret metadata. Must not include token, webhook, credential, or raw auth values."
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "lifecycle": {
+            "const": "tombstoned"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "indexable": {
+            "const": false
+          },
+          "deleted_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    }
+  ]
+}

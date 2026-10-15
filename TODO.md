@@ -52,3 +52,7 @@ with sqlite3.connect('exports/sqlite/korean-law.db') as conn:
     print(conn.execute('select count(*) from documents').fetchone()[0])
 PY
 ```
+
+## 2026-10-15 상태 업데이트
+
+위 목록은 원래 후속 과업을 보존한 것입니다. 각 항목의 실제 구현/검증/결정/잔여 상태는 `docs/completion-ledger.md`의 세부 행을 참조하십시오. `scripts/verify.sh`는 offline 합성 fixture만 사용합니다. 중앙 source 등록, live LAW_OC, 지원 adapter 승격, 실 DB migration, 새 CI 실행 환경은 아직 완료/활성화하지 않았습니다.

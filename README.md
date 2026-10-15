@@ -11,7 +11,7 @@
 `fordongdorrong` repository를 건드리지 않고, 이 랩 안에서 RAG/SQLite importer가 읽을 수 있는 산출물을 만듭니다. API 키 유무와 관계없이 동작합니다.
 
 ```bash
-cd /home/dongdorrong/github/private/korean-law-mcp-lab
+cd <repo>
 python3 scripts/export_fordongdorrong_backend.py --print-summary
 ```
 
@@ -65,7 +65,7 @@ korean-law-mcp-lab/
 원본 저장소 클론은 용량과 중첩 Git 이슈를 피하기 위해 이 랩 저장소에 커밋하지 않습니다. 새 환경에서 시작할 때는 먼저 bootstrap 스크립트를 실행하세요.
 
 ```bash
-cd /home/dongdorrong/github/private/korean-law-mcp-lab
+cd <repo>
 chmod +x scripts/bootstrap-upstreams.sh
 ./scripts/bootstrap-upstreams.sh
 ```
@@ -73,7 +73,7 @@ chmod +x scripts/bootstrap-upstreams.sh
 ### 1. legalize-kr 데이터 확인
 
 ```bash
-cd /home/dongdorrong/github/private/korean-law-mcp-lab
+cd <repo>
 
 sed -n '1,40p' upstreams/legalize-kr/kr/민법/법률.md
 rg -n '제750조|제103조' upstreams/legalize-kr/kr/민법/법률.md
@@ -83,7 +83,7 @@ git -C upstreams/legalize-kr log --oneline --max-count=5 -- kr/민법/법률.md
 ### 2. korean-law-mcp CLI 확인
 
 ```bash
-cd /home/dongdorrong/github/private/korean-law-mcp-lab/upstreams/korean-law-mcp
+cd <repo>/upstreams/korean-law-mcp
 
 npm run build
 node build/cli.js list --json
@@ -100,7 +100,7 @@ node build/cli.js search_law --query 민법
 ### 3. MCP HTTP 서버 확인
 
 ```bash
-cd /home/dongdorrong/github/private/korean-law-mcp-lab/upstreams/korean-law-mcp
+cd <repo>/upstreams/korean-law-mcp
 LAW_OC='발급받은-법제처-OC-키' node build/index.js --mode http --port 8765
 curl http://127.0.0.1:8765/health
 ```
@@ -135,3 +135,20 @@ curl http://127.0.0.1:8765/health
 2. 법제처 OpenAPI 인증키가 있으면 `LAW_OC`로 설정하고 live MCP smoke를 진행합니다.
 3. `docs/korean-law-mcp-guide.md`의 CLI 실습을 실제 API 호출까지 진행합니다.
 4. `docs/integrated-practice.md`의 시나리오를 따라 Git 데이터와 MCP 결과를 비교합니다.
+
+## 2026-10-15 repo-local 안전성 업데이트
+
+위의 2026-06 실습·검증 표는 **당시 이력**이며 현재 법령 최신성이나 live 인증 성공의 증거가 아닙니다. 이번 작업은 기존 tracked `exports/`와 기존 upstream checkout을 갱신하지 않았습니다. API 키가 있어도 exporter는 실제 LAW_OC 호출을 하지 않으며 `live_verified=false`입니다. 실제 호출 예시는 별도 승인 전 실행하지 않습니다.
+
+- 재현 검증: `./scripts/verify.sh` (합성 자료·임시 출력만 사용).
+- upstream 준비: `./scripts/bootstrap-upstreams.sh`는 `upstreams.lock.json`의 SHA만 준비하며, `--propose-update`는 후보만 출력합니다. `legalize-kr` 라이선스는 미확인입니다.
+- 신규 export의 `created_at`은 유효한 공포일 또는 null, `updated_at`은 관측 시각입니다. 법적 시행일, 원본 변경일, live 검증 시각은 별도 metadata입니다. snapshot은 미검증입니다.
+- 첫 생성 이후 **기존 고정 경로 3개는 그대로 유지**하고, 새 세대는 불변 `.law-generations/`에 기록한 뒤 `.current.json` 포인터 하나를 교체합니다. 새 소비자는 `read_current_generation()`으로 포인터를 고정·검증해 읽어야 합니다. 고정 경로만 읽는 기존 소비자는 이전 완전 세대를 계속 읽지만 최신 세대로 자동 이동하지 않습니다. 여러 파일을 하나의 원자적 교체라고 주장하지 않습니다.
+- `--migration-report`는 `--previous-jsonl`을 반드시 요구하고, 기존 ID의 모호한 대응을 unresolved로 보고합니다. 실제 migration은 하지 않습니다.
+- 중앙 Knowledge v1은 현재 법령 `source_id`를 허용하지 않습니다. `scripts/reconcile_knowledge_contract.py`는 pinned schema 전체에 대한 offline dry-run을 수행하며 중앙 쓰기를 하지 않습니다.
+
+세부 검증·잔여 gate는 `docs/completion-ledger.md` 및 `docs/fordongdorrong-integration.md`의 최신 절을 참조하십시오.
+
+첫 고정 경로 발행의 journal은 임시 파일에 완전히 기록·fsync한 뒤 같은 디렉터리의 하드링크로 최종 이름을 배타적으로 발행합니다. 다른 발행자가 먼저 journal을 만들었으면 덮어쓰지 않고 실패합니다. 출력 발행 도중 중단되면 `.law-first-publish.journal.json`을 남기고 재시도를 거절합니다. `recover_first_publish(root, source_dir, jsonl, sqlite, manifest)`의 기본값은 **읽기 전용 dry-run**입니다. `apply=True`는 기록된 SHA의 부분 출력을 삭제하지 않고 `.law-recovery-*` 감사용 파일로 옮겨 검증합니다. 파일이 도중 교체되면 새 내용을 덮거나 삭제하지 않고 가능한 경우 원래 경로에 비파괴적으로 복원하며 journal을 보존합니다. 이전 버전의 잘린 journal은 출력 3종이 모두 없을 때만 격리할 수 있습니다. 감사 파일은 자동 삭제하지 않습니다. 기존 자료의 자동 정리는 하지 않습니다. 기존 고정 3종 파일은 개수·JSONL/SQLite parity·manifest 상태 검증을 통과해야 동결됩니다. `--limit` 및 명시적 빈 결과는 처음부터 immutable smoke 세대로만 만들며 고정 경로의 완전 기준선이 되지 않습니다.
+
+Offline LAW_OC 오류 분류는 `scripts/live_contract.py`에 있으며, 잠긴 `korean-law-mcp`의 `LawApiClient.searchLaw()` XML 반환 계약을 `tests/fixtures/pinned-mcp-search-contract.json`에 해시로 고정해 합성 XML과 fake transport로만 검사합니다. 이 랩은 upstream 검색 parser보다 엄격하게 `LawSearch` root, 결과 수, 필수 law 필드·공포일자의 실제 달력 날짜 및 XML 오류를 검사하며, HTML/오류/불명확한 응답을 0건 성공으로 해석하지 않습니다. 실제 API 호출, 인증 성공, 법적 최신성 검증은 아닙니다.
