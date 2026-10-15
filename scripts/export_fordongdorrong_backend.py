@@ -148,6 +148,8 @@ def export_backend(
 
     generated_at = utc_now()
     legalize_commit, source_diagnostic = verified_upstream_commit(root, "legalize-kr")
+    if source_dir.resolve() != (root / "upstreams" / "legalize-kr" / "kr").resolve():
+        legalize_commit, source_diagnostic = None, "source directory is not the pinned legalize-kr kr tree"
     mcp_dir = root / "upstreams" / "korean-law-mcp"
     mcp_commit, _ = verified_upstream_commit(root, "korean-law-mcp")
     law_oc_configured = bool(os.environ.get("LAW_OC"))
@@ -718,9 +720,11 @@ def verified_upstream_commit(root: Path, name: str) -> tuple[str | None, str]:
         remote = subprocess.run(["git", "-C", str(target), "remote", "get-url", "origin"],
                                 check=True, capture_output=True, text=True).stdout.strip()
         commit = git_commit(target)
+        dirty = subprocess.run(["git", "-C", str(target), "status", "--porcelain"],
+                               check=True, capture_output=True, text=True).stdout.strip()
     except subprocess.CalledProcessError:
         return None, "upstream Git metadata unavailable"
-    if Path(top).resolve() != target.resolve() or remote != spec["url"] or commit != spec["commit"]:
+    if Path(top).resolve() != target.resolve() or remote != spec["url"] or commit != spec["commit"] or dirty:
         return None, "upstream checkout differs from pinned provenance"
     return commit, "pinned checkout verified"
 

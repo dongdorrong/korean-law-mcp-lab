@@ -311,6 +311,19 @@ class ExportFordongdorrongBackendTests(unittest.TestCase):
             self.assertEqual("unverified_source", manifest["local_export"]["status"])
             self.assertIsNone(manifest["local_export"]["source_commit"])
 
+    def test_custom_source_cannot_borrow_verified_upstream_commit(self) -> None:
+        from scripts import export_fordongdorrong_backend as exporter
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "custom/테스트법"
+            source.mkdir(parents=True)
+            (source / "법률.md").write_text(SAMPLE_LAW, encoding="utf-8")
+            with patch.object(exporter, "verified_upstream_commit", return_value=("a" * 40, "pinned")):
+                result = exporter.export_backend(root=root, source_dir=source.parent,
+                                                 jsonl_path=root / "out.jsonl", sqlite_path=root / "out.db",
+                                                 manifest_path=root / "manifest.json")
+            self.assertIsNone(result["legalize_commit"])
+
     def test_empty_source_preserves_existing_export(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
