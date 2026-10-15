@@ -37,6 +37,109 @@ SAMPLE_LAW = """---
 
 
 class ExportFordongdorrongBackendTests(unittest.TestCase):
+    def test_verify_missing_sqlite_does_not_create_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            missing = root / "missing.db"
+            self.assertFalse(verify_published(root / "out.jsonl", missing, root / "manifest.json"))
+            self.assertFalse(missing.exists())
+
+    def test_first_publish_interruption_has_dry_run_recovery(self) -> None:
+        from scripts import export_fordongdorrong_backend as exporter
+        for fail_at in (1, 2, 3):
+            with self.subTest(fail_at=fail_at), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                source = root / "kr/테스트법"
+                source.mkdir(parents=True)
+                (source / "법률.md").write_text(SAMPLE_LAW, encoding="utf-8")
+                args = dict(root=root, source_dir=source.parent, jsonl_path=root / "out.jsonl",
+                            sqlite_path=root / "out.db", manifest_path=root / "manifest.json")
+                original = os.replace
+                calls = 0
+                def interrupt(src, dst, **kwargs):
+                    nonlocal calls
+                    calls += 1
+                    if calls == fail_at:
+                        raise OSError("injected first publish interruption")
+                    return original(src, dst, **kwargs)
+                with patch.object(exporter.os, "replace", side_effect=interrupt):
+                    with self.assertRaises(OSError):
+                        exporter.export_backend(**args)
+                report = exporter.recover_first_publish(*args.values(), apply=False)
+                self.assertTrue(report["recoverable"])
+                exporter.recover_first_publish(*args.values(), apply=True)
+                self.assertFalse((root / "out.jsonl").exists())
+                exporter.export_backend(**args)
+                self.assertTrue(verify_published(root / "out.jsonl", root / "out.db", root / "manifest.json"))
+
+    def test_corrupt_existing_baseline_is_rejected_without_overwrite(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "kr/테스트법"
+            source.mkdir(parents=True)
+            path = source / "법률.md"
+            path.write_text(SAMPLE_LAW, encoding="utf-8")
+            args = dict(root=root, source_dir=source.parent, jsonl_path=root / "out.jsonl",
+                        sqlite_path=root / "out.db", manifest_path=root / "manifest.json")
+            export_backend(**args)
+            legacy_manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+            legacy_manifest.pop("generation")
+            (root / "manifest.json").write_text(json.dumps(legacy_manifest), encoding="utf-8")
+            (root / "out.db").write_bytes(b"corrupt")
+            path.write_text(SAMPLE_LAW + "changed", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                export_backend(**args)
+            self.assertEqual(b"corrupt", (root / "out.db").read_bytes())
+
+    def test_valid_legacy_baseline_without_checksum_is_parity_checked(self) -> None:
+        from scripts.export_fordongdorrong_backend import verify_fixed_baseline
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "kr/테스트법"
+            source.mkdir(parents=True)
+            (source / "법률.md").write_text(SAMPLE_LAW, encoding="utf-8")
+            paths = (root / "out.jsonl", root / "out.db", root / "manifest.json")
+            args = dict(root=root, source_dir=source.parent, jsonl_path=paths[0],
+                        sqlite_path=paths[1], manifest_path=paths[2])
+            export_backend(**args)
+            legacy = json.loads(paths[2].read_text(encoding="utf-8"))
+            legacy.pop("generation")
+            paths[2].write_text(json.dumps(legacy), encoding="utf-8")
+            self.assertTrue(verify_fixed_baseline(*paths))
+            result = export_backend(**args)
+            self.assertNotEqual(paths[2], Path(result["manifest"]))
+
+    def test_first_limit_export_does_not_freeze_partial_fixed_baseline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "kr/테스트법"
+            source.mkdir(parents=True)
+            (source / "법률.md").write_text(SAMPLE_LAW, encoding="utf-8")
+            args = dict(root=root, source_dir=source.parent, jsonl_path=root / "out.jsonl",
+                        sqlite_path=root / "out.db", manifest_path=root / "manifest.json")
+            result = export_backend(**args, limit=1)
+            self.assertFalse((root / "out.jsonl").exists())
+            self.assertTrue(verify_published(Path(result["jsonl"]), Path(result["sqlite"]), Path(result["manifest"])))
+            export_backend(**args)
+            self.assertTrue((root / "out.jsonl").exists())
+
+    def test_manifest_configuration_changes_generation_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "kr/테스트법"
+            source.mkdir(parents=True)
+            (source / "법률.md").write_text(SAMPLE_LAW, encoding="utf-8")
+            args = dict(root=root, source_dir=source.parent, jsonl_path=root / "out.jsonl",
+                        sqlite_path=root / "out.db", manifest_path=root / "manifest.json")
+            with patch("scripts.export_fordongdorrong_backend.utc_now", return_value="2026-10-15T00:00:00Z"):
+                with patch.dict(os.environ, {"LAW_OC": ""}):
+                    export_backend(**args)
+                with patch.dict(os.environ, {"LAW_OC": "synthetic"}):
+                    result = export_backend(**args)
+            initial = json.loads((root / "manifest.json").read_text(encoding="utf-8"))["generation"]["id"]
+            updated = json.loads(Path(result["manifest"]).read_text(encoding="utf-8"))["generation"]["id"]
+            self.assertNotEqual(initial, updated)
+
     def test_cli_rejects_symlink_before_resolve(self) -> None:
         from scripts.export_fordongdorrong_backend import main
         import sys
@@ -82,6 +185,31 @@ class ExportFordongdorrongBackendTests(unittest.TestCase):
                                sqlite_path=root / "out.db", manifest_path=root / "manifest.json")
             self.assertEqual([], list((root / "actual").iterdir()))
 
+    def test_parent_symlink_swap_during_replace_cannot_write_outside_root(self) -> None:
+        from scripts import export_fordongdorrong_backend as exporter
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside_tmp:
+            root, outside = Path(tmp), Path(outside_tmp)
+            source = root / "kr/테스트법"
+            source.mkdir(parents=True)
+            (source / "법률.md").write_text(SAMPLE_LAW, encoding="utf-8")
+            alias = root / "target"
+            alias.mkdir()
+            original = os.replace
+            swapped = False
+            def swap_then_replace(src, dst, **kwargs):
+                nonlocal swapped
+                if not swapped:
+                    alias.rename(root / "moved_target")
+                    alias.symlink_to(outside, target_is_directory=True)
+                    swapped = True
+                return original(src, dst, **kwargs)
+            with patch.object(exporter.os, "replace", side_effect=swap_then_replace):
+                with self.assertRaises((ValueError, OSError)):
+                    exporter.export_backend(root=root, source_dir=source.parent,
+                                            jsonl_path=alias / "out.jsonl", sqlite_path=root / "out.db",
+                                            manifest_path=root / "manifest.json")
+            self.assertEqual([], list(outside.iterdir()))
+
     def test_manifest_checksum_rejects_interrupted_generation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -109,10 +237,10 @@ class ExportFordongdorrongBackendTests(unittest.TestCase):
             exporter.export_backend(**args)
             path.write_text(SAMPLE_LAW.replace("검색 가능한 근거", "변경된 근거"), encoding="utf-8")
             original_replace = os.replace
-            def fail_pointer(src, dst):
+            def fail_pointer(src, dst, **kwargs):
                 if str(dst).endswith(".current.json"):
                     raise OSError("injected publish interruption")
-                return original_replace(src, dst)
+                return original_replace(src, dst, **kwargs)
             with patch.object(exporter.os, "replace", side_effect=fail_pointer):
                 with self.assertRaisesRegex(OSError, "interruption"):
                     exporter.export_backend(**args)
@@ -180,16 +308,17 @@ class ExportFordongdorrongBackendTests(unittest.TestCase):
             source.mkdir(parents=True)
             (source / "법률.md").write_text(SAMPLE_LAW, encoding="utf-8")
             paths = (root / "out.jsonl", root / "out.db", root / "manifest.json")
-            export_backend(root=root, source_dir=source.parent, jsonl_path=paths[0],
-                           sqlite_path=paths[1], manifest_path=paths[2], limit=1)
-            manifest = json.loads(paths[2].read_text(encoding="utf-8"))
+            result = export_backend(root=root, source_dir=source.parent, jsonl_path=paths[0],
+                                    sqlite_path=paths[1], manifest_path=paths[2], limit=1)
+            published = tuple(Path(result[key]) for key in ("jsonl", "sqlite", "manifest"))
+            manifest = json.loads(published[2].read_text(encoding="utf-8"))
             self.assertFalse(manifest["generation"]["complete_snapshot"])
             self.assertEqual("partial_unverified_source", manifest["local_export"]["status"])
             (source / "법률.md").write_text(SAMPLE_LAW.replace("##### 제2조", "##### 제1조"), encoding="utf-8")
             with self.assertRaises(ValueError):
                 export_backend(root=root, source_dir=source.parent, jsonl_path=paths[0],
                                sqlite_path=paths[1], manifest_path=paths[2])
-            self.assertTrue(verify_published(*paths))
+            self.assertTrue(verify_published(*published))
 
     def test_article_id_survives_insertion_and_sections_do_not_collide(self) -> None:
         from scripts.export_fordongdorrong_backend import knowledge_documents

@@ -1,6 +1,11 @@
-"""Offline injectable live-evidence boundary; intentionally has no network transport."""
+"""Offline injectable boundary for pinned korean-law-mcp searchLaw XML.
+
+Pinned upstream LawApiClient.searchLaw returns XML text or throws on HTTP error.
+No network client or credential handling is implemented here.
+"""
 from dataclasses import dataclass
 from typing import Callable, Any
+from xml.etree import ElementTree
 
 
 @dataclass(frozen=True)
@@ -8,10 +13,10 @@ class TransportError(Exception):
     status: int
 
 
-def probe_search(client: Callable[[str], Any], query: str) -> dict[str, Any]:
-    """Normalize a fake/live transport response without claiming live verification."""
+def probe_search(client: Callable[[str], str], query: str) -> dict[str, Any]:
+    """Classify fake transport errors and parse pinned search_law XML law tags."""
     try:
-        response = client(query)
+        xml_text = client(query)
     except TimeoutError:
         return {"status": "timeout", "live_verified": False}
     except TransportError as exc:
@@ -19,10 +24,21 @@ def probe_search(client: Callable[[str], Any], query: str) -> dict[str, Any]:
         return {"status": state or "upstream_error", "live_verified": False}
     except OSError:
         return {"status": "transport_error", "live_verified": False}
-    if not isinstance(response, dict) or not isinstance(response.get("results"), list):
+    if not isinstance(xml_text, str) or "<!DOCTYPE" in xml_text.upper():
         return {"status": "schema_error", "live_verified": False}
-    if any(not isinstance(item, dict) or not all(isinstance(item.get(key), str) and item[key]
-               for key in ("law_title", "article_no", "text", "source_uri")) for item in response["results"]):
+    try:
+        document = ElementTree.fromstring(xml_text)
+        hits = []
+        for law in document.iter("law"):
+            title = law.findtext("법령명한글")
+            law_id = law.findtext("법령ID")
+            mst = law.findtext("법령일련번호")
+            if not title or not law_id or not mst:
+                raise ValueError("missing law search field")
+            hits.append({"law_title": title, "law_id": law_id, "mst": mst,
+                         "promulgation_date": law.findtext("공포일자") or None,
+                         "law_type": law.findtext("법령구분명") or None})
+    except (ElementTree.ParseError, ValueError):
         return {"status": "schema_error", "live_verified": False}
-    return {"status": "response_shape_valid_offline", "live_verified": False,
-            "results": response["results"]}
+    return {"status": "response_shape_valid_offline" if hits else "no_results_offline",
+            "live_verified": False, "hits": hits}

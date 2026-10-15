@@ -152,3 +152,5 @@ documents(
 새 JSONL의 `created_at`은 유효 공포일 또는 null, `updated_at`은 관측 시각입니다. 시행일·원본 변경일·live 검증 시각을 metadata에 분리합니다. snapshot의 `verification_status=unverified`, `live_verified_at=null`, `legal_advice=false`, `legal_effect_status=not_determined`입니다. 데이터 lifecycle=active는 법적 효력 판정이 아닙니다. `temporal_relation`은 단순 날짜 비교입니다.
 
 첫 생성 후 고정 경로는 이전 완전 세대로 고정됩니다. 새로운 immutable 세대는 manifest와 JSONL/SQLite checksum을 갖고 `.current.json` 포인터 하나로 커밋됩니다. 새 소비자는 `read_current_generation(root, pointer)`를 사용해야 하며, 기존 고정 경로 소비자는 새 세대로 자동 이동하지 않습니다. 첫 생성에서 산출물이 없고 쓰기가 중단되면 manifest 검증으로 거절합니다. API 키 존재·build·health·인증·법령 조회 성공은 서로 다른 상태입니다. 실제 live API 검증과 중앙 통합은 이번에 수행하지 않았습니다.
+
+첫 발행 중단은 journal에 의해 명시적으로 격리하고 `recover_first_publish()` dry-run으로 점검합니다. 기존 고정 triplet은 새로운 checksum manifest이면 hash까지, 구형 manifest이면 문서 개수와 JSONL/SQLite ID·본문 hash·metadata parity를 검증한 뒤에만 안전한 기존 기준선으로 취급합니다. 누락·불일치·partial이면 새 발행을 거절합니다. `--limit`/명시적 빈 결과는 immutable smoke 산출물일 뿐 고정 기준선을 만들지 않습니다. generation ID는 데이터 hash와 manifest 의미를 함께 반영합니다. 검증용 SQLite는 read-only URI로만 엽니다.

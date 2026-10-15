@@ -148,3 +148,7 @@ curl http://127.0.0.1:8765/health
 - 중앙 Knowledge v1은 현재 법령 `source_id`를 허용하지 않습니다. `scripts/reconcile_knowledge_contract.py`는 pinned schema 전체에 대한 offline dry-run을 수행하며 중앙 쓰기를 하지 않습니다.
 
 세부 검증·잔여 gate는 `docs/completion-ledger.md` 및 `docs/fordongdorrong-integration.md`의 최신 절을 참조하십시오.
+
+첫 고정 경로 발행 도중 중단되면 `.law-first-publish.journal.json`을 남기고 재시도를 거절합니다. `recover_first_publish(root, source_dir, jsonl, sqlite, manifest)`의 기본값은 **읽기 전용 dry-run**입니다. 기록된 SHA와 경로가 모두 일치할 때에만 합성 출력에서 `apply=True`로 작업이 새로 만든 부분 파일을 정리할 수 있으며 기존 자료의 자동 정리는 하지 않습니다. 기존 고정 3종 파일은 개수·JSONL/SQLite parity·manifest 상태 검증을 통과해야 동결됩니다. `--limit` 및 명시적 빈 결과는 처음부터 immutable smoke 세대로만 만들며 고정 경로의 완전 기준선이 되지 않습니다.
+
+Offline LAW_OC 오류 분류는 `scripts/live_contract.py`에 있으며, 잠긴 `korean-law-mcp`의 `LawApiClient.searchLaw()` XML 반환 계약을 `tests/fixtures/pinned-mcp-search-contract.json`에 해시로 고정해 합성 XML과 fake transport로만 검사합니다. 실제 API 호출, 인증 성공, 법적 최신성 검증은 아닙니다.

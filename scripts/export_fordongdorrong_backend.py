@@ -24,6 +24,7 @@ import sqlite3
 import subprocess
 import tempfile
 import shutil
+from urllib.parse import quote
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -166,8 +167,15 @@ def export_backend(
 
     assert_no_secret_like_payload(documents)
     paths = (jsonl_path, sqlite_path, manifest_path)
+    journal = manifest_path.parent / ".law-first-publish.journal.json"
+    reject_output_path(journal, root)
+    if journal.exists():
+        raise ValueError("Incomplete first publish journal exists; run recover_first_publish dry-run")
     if any(path.exists() for path in paths) and not all(path.exists() for path in paths):
         raise ValueError("Incomplete fixed-path legacy set; existing files were not changed")
+    existing_fixed = all(path.exists() for path in paths)
+    if existing_fixed and not verify_fixed_baseline(*paths):
+        raise ValueError("Existing fixed-path baseline failed consistency validation")
     if len({path.absolute() for path in paths}) != 3 or len({path.resolve() for path in paths}) != 3:
         raise ValueError("JSONL, SQLite and manifest output paths must be distinct")
     for index, path in enumerate(paths):
@@ -194,7 +202,6 @@ def export_backend(
         law_oc_configured=law_oc_configured,
         )
         manifest["generation"] = {
-            "id": hashlib.sha256(staged_jsonl.read_bytes() + staged_sqlite.read_bytes()).hexdigest(),
             "jsonl_sha256": hashlib.sha256(staged_jsonl.read_bytes()).hexdigest(),
             "sqlite_sha256": hashlib.sha256(staged_sqlite.read_bytes()).hexdigest(),
             "complete_snapshot": limit == 0,
@@ -205,13 +212,16 @@ def export_backend(
             manifest["local_export"]["status"] = "unverified_source" if limit == 0 else "partial_unverified_source"
         manifest["local_export"]["source_diagnostic"] = source_diagnostic
         manifest["sqlite_schema"]["fts_available"] = sqlite_fts_available(staged_sqlite)
+        manifest["generation"]["id"] = hashlib.sha256(
+            json.dumps(manifest, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        ).hexdigest()
         assert_no_secret_like_payload([manifest])
         write_json(staged_manifest, manifest)
         verify_staged(staged_jsonl, staged_sqlite, staged_manifest)
         for staged in (staged_jsonl, staged_sqlite, staged_manifest):
             sync_file(staged)
         sync_dir(stage)
-        if any(path.exists() for path in paths):
+        if existing_fixed or limit > 0 or not documents:
             # Legacy fixed paths are frozen as one complete generation. New writes
             # go to immutable files; only a single pointer is replaced.
             generation_dir = manifest_path.parent / ".law-generations" / manifest["generation"]["id"]
@@ -223,35 +233,44 @@ def export_backend(
             sync_dir(stage)
             if generation_dir.exists():
                 verify_staged(generation_dir / "out.jsonl", generation_dir / "out.db", generation_dir / "manifest.json")
+                if staged_manifest.read_bytes() != (generation_dir / "manifest.json").read_bytes():
+                    raise ValueError("Generation identity collision with different manifest")
             else:
                 generation_dir.parent.mkdir(parents=True, exist_ok=True)
-                stage.rename(generation_dir)
+                safe_replace(stage, generation_dir, root)
                 sync_dir(generation_dir.parent)
-            pointer = manifest_path.with_suffix(".current.json")
-            reject_output_path(pointer, root)
-            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=pointer.parent,
-                                             prefix=".law-pointer-", delete=False) as handle:
-                json.dump({"generation_manifest": relative(generation_dir / "manifest.json", root),
-                           "generation_id": manifest["generation"]["id"]}, handle)
-                pointer_tmp = Path(handle.name)
-                handle.flush()
-                os.fsync(handle.fileno())
-            try:
+            if existing_fixed:
+                pointer = manifest_path.with_suffix(".current.json")
                 reject_output_path(pointer, root)
-                os.replace(pointer_tmp, pointer)
-                sync_dir(pointer.parent)
-            finally:
-                pointer_tmp.unlink(missing_ok=True)
+                with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=pointer.parent,
+                                                 prefix=".law-pointer-", delete=False) as handle:
+                    json.dump({"generation_manifest": relative(generation_dir / "manifest.json", root),
+                               "generation_id": manifest["generation"]["id"]}, handle)
+                    pointer_tmp = Path(handle.name)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                try:
+                    reject_output_path(pointer, root)
+                    safe_replace(pointer_tmp, pointer, root)
+                    sync_dir(pointer.parent)
+                finally:
+                    pointer_tmp.unlink(missing_ok=True)
             jsonl_path, sqlite_path, manifest_path = (generation_dir / name for name in ("out.jsonl", "out.db", "manifest.json"))
         else:
             # First creation cannot replace a previously complete fixed-path set.
             for path in paths:
                 reject_output_path(path, root)
-            os.replace(staged_jsonl, jsonl_path)
-            os.replace(staged_sqlite, sqlite_path)
-            os.replace(staged_manifest, manifest_path)
+            safe_create_json(journal, {"schema": 1, "paths": [relative(path, root) for path in paths],
+                                       "sha256": [hashlib.sha256(path.read_bytes()).hexdigest() for path in
+                                                  (staged_jsonl, staged_sqlite, staged_manifest)]}, root)
+            sync_dir(journal.parent)
+            safe_replace(staged_jsonl, jsonl_path, root)
+            safe_replace(staged_sqlite, sqlite_path, root)
+            safe_replace(staged_manifest, manifest_path, root)
             for parent in {path.parent for path in paths}:
                 sync_dir(parent)
+            safe_unlink(journal, root)
+            sync_dir(journal.parent)
         if not verify_published(jsonl_path, sqlite_path, manifest_path):
             raise ValueError("Published generation failed validation")
     finally:
@@ -757,9 +776,11 @@ def sqlite_fts_available(path: Path) -> bool:
 
 
 def verify_staged(jsonl: Path, sqlite: Path, manifest: Path) -> bool:
+    if not all(path.is_file() for path in (jsonl, sqlite, manifest)):
+        raise FileNotFoundError("Export artifact missing")
     meta = json.loads(manifest.read_text(encoding="utf-8"))
     docs = [json.loads(line) for line in jsonl.read_text(encoding="utf-8").splitlines()]
-    with sqlite3.connect(sqlite) as conn:
+    with sqlite3.connect(f"file:{quote(str(sqlite.resolve()))}?mode=ro", uri=True) as conn:
         rows = conn.execute("SELECT document_id, content_hash, metadata_json FROM documents").fetchall()
     if len(docs) != len(rows) or len(docs) != meta["local_export"]["document_count"]:
         raise ValueError("Export artifact counts disagree")
@@ -782,6 +803,63 @@ def verify_published(jsonl: Path, sqlite: Path, manifest: Path) -> bool:
     return True
 
 
+def verify_fixed_baseline(jsonl: Path, sqlite: Path, manifest: Path) -> bool:
+    """Validate a complete fixed triplet, including older manifests without hashes."""
+    if not all(path.is_file() for path in (jsonl, sqlite, manifest)):
+        return False
+    try:
+        meta = json.loads(manifest.read_text(encoding="utf-8"))
+        local = meta["local_export"]
+        if local.get("status") not in {"ready", "unverified_source"}:
+            return False
+        if "generation" in meta:
+            return meta["generation"].get("complete_snapshot") is True and verify_published(jsonl, sqlite, manifest)
+        docs = [json.loads(line) for line in jsonl.read_text(encoding="utf-8").splitlines()]
+        with sqlite3.connect(f"file:{quote(str(sqlite.resolve()))}?mode=ro", uri=True) as conn:
+            rows = conn.execute("SELECT document_id, content_hash, metadata_json FROM documents").fetchall()
+        return (len(docs) > 0 and len(docs) == len(rows) == local["document_count"] and
+                {d["document_id"]: (d["content_hash"], d["metadata"]) for d in docs} ==
+                {doc_id: (digest, json.loads(metadata)) for doc_id, digest, metadata in rows})
+    except (OSError, ValueError, KeyError, TypeError, sqlite3.DatabaseError, json.JSONDecodeError):
+        return False
+
+
+def recover_first_publish(root: Path, source_dir: Path, jsonl_path: Path, sqlite_path: Path,
+                          manifest_path: Path, *, apply: bool = False) -> dict[str, Any]:
+    """Report or clear only journal-proven newly created partial files; never old data."""
+    del source_dir
+    paths = (jsonl_path, sqlite_path, manifest_path)
+    journal = manifest_path.parent / ".law-first-publish.journal.json"
+    reject_output_path(journal, root)
+    if not journal.is_file():
+        return {"recoverable": False, "reason": "no first-publish journal", "dry_run": not apply}
+    try:
+        record = json.loads(journal.read_text(encoding="utf-8"))
+        if record.get("schema") != 1 or record.get("paths") != [relative(path, root) for path in paths]:
+            raise ValueError("journal does not match requested output paths")
+        existing = []
+        for path, digest in zip(paths, record["sha256"], strict=True):
+            reject_output_path(path, root)
+            if path.exists():
+                if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+                    raise ValueError("partial output differs from journal; manual review required")
+                existing.append(path)
+        if len(existing) == 3 and verify_published(*paths):
+            if apply:
+                safe_unlink(journal, root)
+            return {"recoverable": True, "complete": True, "dry_run": not apply}
+        if apply:
+            for path in existing:
+                if hashlib.sha256(path.read_bytes()).hexdigest() != record["sha256"][paths.index(path)]:
+                    raise ValueError("partial output changed during recovery")
+                safe_unlink(path, root)
+            safe_unlink(journal, root)
+        return {"recoverable": True, "complete": False, "files": [relative(path, root) for path in existing],
+                "dry_run": not apply}
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return {"recoverable": False, "reason": str(exc), "dry_run": not apply}
+
+
 def reject_output_path(path: Path, root: Path) -> None:
     root = root.resolve()
     absolute = path.absolute()
@@ -792,6 +870,64 @@ def reject_output_path(path: Path, root: Path) -> None:
         if current.is_symlink():
             raise ValueError("Output symlink component forbidden")
         current = current.parent
+
+
+def open_parent_dir(path: Path, root: Path) -> int:
+    """Anchor publication to no-follow directory descriptors, not a re-resolved path."""
+    root = root.resolve()
+    absolute = path.absolute()
+    if not absolute.is_relative_to(root):
+        raise ValueError("Publication path escapes root")
+    relative_parts = absolute.relative_to(root).parts[:-1]
+    if ".." in relative_parts:
+        raise ValueError("Publication path contains parent traversal")
+    descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for part in relative_parts:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def safe_replace(source: Path, destination: Path, root: Path) -> None:
+    source_fd = open_parent_dir(source, root)
+    try:
+        destination_fd = open_parent_dir(destination, root)
+        try:
+            os.replace(source.name, destination.name, src_dir_fd=source_fd, dst_dir_fd=destination_fd)
+        finally:
+            os.close(destination_fd)
+    finally:
+        os.close(source_fd)
+
+
+def safe_create_json(path: Path, value: dict[str, Any], root: Path) -> None:
+    parent_fd = open_parent_dir(path, root)
+    try:
+        descriptor = os.open(path.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                             0o600, dir_fd=parent_fd)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump(value, handle, ensure_ascii=False)
+                handle.flush()
+                os.fsync(handle.fileno())
+        except BaseException:
+            os.unlink(path.name, dir_fd=parent_fd)
+            raise
+    finally:
+        os.close(parent_fd)
+
+
+def safe_unlink(path: Path, root: Path) -> None:
+    parent_fd = open_parent_dir(path, root)
+    try:
+        os.unlink(path.name, dir_fd=parent_fd)
+    finally:
+        os.close(parent_fd)
 
 
 def sync_file(path: Path) -> None:
