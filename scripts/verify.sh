@@ -4,6 +4,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 export PYTHONDONTWRITEBYTECODE=1
 PYTHON="${PYTHON:-python3}"
+# macOS /var is an alias of /private/var. Use its physical spelling so
+# temporary test roots and the exporter's resolved containment checks agree.
+export TMPDIR="$("$PYTHON" -c 'import pathlib, tempfile; print(pathlib.Path(tempfile.gettempdir()).resolve())')"
 "$PYTHON" -m unittest discover -s tests -v
 CACHE="$(mktemp -d)"
 trap 'rm -r "$CACHE"' EXIT

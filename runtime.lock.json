@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "name": "korean-law-mcp-security-20261021",
+  "upstream_name": "korean-law-mcp",
+  "upstream_commit": "f71b28c992db7b1347b7cfb68695c38392339ef0",
+  "original_package_lock_sha256": "ef545e8c5ea7234a978387493e27bc348c556fe77689ee94f11e1a493eb8ecdb",
+  "patch": "patches/korean-law-mcp-dependencies.patch",
+  "patch_sha256": "d256748a675174a3d2a0e61f9518ff3ea07b9470c2786f60d92d5181d8ab49fd",
+  "runtime_package_lock_sha256": "927f8911a119332f363bc19a581e2b21ec3a02a53d6b03542e66be62eca80352",
+  "scope": "dependency-lock-only; application source and package.json unchanged",
+  "install": [
+    "npm",
+    "ci",
+    "--ignore-scripts"
+  ],
+  "build": [
+    "npm",
+    "run",
+    "build"
+  ],
+  "live_api_verified": false
+}

@@ -80,15 +80,32 @@ rg -n '제750조|제103조' upstreams/legalize-kr/kr/민법/법률.md
 git -C upstreams/legalize-kr log --oneline --max-count=5 -- kr/민법/법률.md
 ```
 
-### 2. korean-law-mcp CLI 확인
+### 2. 검토된 의존성 패치로 korean-law-mcp 실행
+
+원본 upstream SHA는 이력 재현용으로 유지합니다. 실행 환경은
+`runtime.lock.json`에 기록된 lock-only 보안 패치를 적용해 별도로 만듭니다.
+준비 스크립트는 원본 SHA·원본 lock·패치·결과 lock 해시를 확인하며,
+애플리케이션 소스 변경이나 기존 실행 폴더 덮어쓰기를 거부합니다.
 
 ```bash
-cd <repo>/upstreams/korean-law-mcp
-
+cd <repo>
+python3 scripts/prepare_runtime.py --destination .runtime/korean-law-mcp-security
+cd .runtime/korean-law-mcp-security
+npm ci --ignore-scripts
 npm run build
+npm audit
 node build/cli.js list --json
-node build/cli.js explain 민법 제1조
 ```
+
+2026-10-21 채택 검증: clean install/build, 알려진 npm 취약점 0건,
+CLI 93개 및 실제 stdio MCP initialize/list 17개 확인. 원본 테스트 43개와
+런타임 준비의 변조·원본 보존·덮어쓰기 방지 테스트 5개가 통과했습니다.
+기본 `scripts/verify.sh`는 macOS 임시 폴더의 `/var` 별칭을 물리 경로로
+정규화하며, exporter의 경로 안전 검사는 그대로 유지합니다.
+
+이는 오프라인 실행 환경 채택입니다. 실제 법제처 호출·인증·법령 최신성·
+데이터 재배포 라이선스·중앙 Knowledge 등록은 검증하지 않았습니다.
+기존 실행 환경과 원본 upstream은 보존되므로 이전 경로로 되돌릴 수 있습니다.
 
 실제 법제처 API 호출은 `LAW_OC`가 필요합니다.
 
@@ -100,7 +117,7 @@ node build/cli.js search_law --query 민법
 ### 3. MCP HTTP 서버 확인
 
 ```bash
-cd <repo>/upstreams/korean-law-mcp
+cd <repo>/.runtime/korean-law-mcp-security
 LAW_OC='발급받은-법제처-OC-키' node build/index.js --mode http --port 8765
 curl http://127.0.0.1:8765/health
 ```
