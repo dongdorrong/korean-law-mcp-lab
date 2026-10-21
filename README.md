@@ -164,6 +164,19 @@ curl http://127.0.0.1:8765/health
 - `--migration-report`는 `--previous-jsonl`을 반드시 요구하고, 기존 ID의 모호한 대응을 unresolved로 보고합니다. 실제 migration은 하지 않습니다.
 - 중앙 Knowledge v1은 현재 법령 `source_id`를 허용하지 않습니다. `scripts/reconcile_knowledge_contract.py`는 pinned schema 전체에 대한 offline dry-run을 수행하며 중앙 쓰기를 하지 않습니다.
 
+중앙의 새 Knowledge v2를 검토할 때만 schema 파일과 SHA-256을 **둘 다 명시**하여
+offline 검증할 수 있습니다. 기본 v1 fixture·과거 commit/hash는 그대로 유지하며
+자동 승격하지 않습니다. 다음 명령은 이미 만든 합성 export를 읽기만 합니다.
+
+```bash
+python3 scripts/reconcile_knowledge_contract.py <synthetic.jsonl> \
+  --schema '../fordongdorrong/05. Engineering/04. Data Knowledge/schemas/knowledge-document.v2.schema.json' \
+  --expected-schema-sha256 71f422c97491c6dc9ab99fa643d89ff1f83dbd36d96ab02f32a669310624731e
+```
+
+명시한 v2의 source enum 확장 외에 기존 제약이 달라지면 거부합니다. 이 검증은
+중앙 운영 import, 실제 법제처 API 호출·인증, 법령 최신성 검증을 수행하지 않습니다.
+
 세부 검증·잔여 gate는 `docs/completion-ledger.md` 및 `docs/fordongdorrong-integration.md`의 최신 절을 참조하십시오.
 
 첫 고정 경로 발행의 journal은 임시 파일에 완전히 기록·fsync한 뒤 같은 디렉터리의 하드링크로 최종 이름을 배타적으로 발행합니다. 다른 발행자가 먼저 journal을 만들었으면 덮어쓰지 않고 실패합니다. 출력 발행 도중 중단되면 `.law-first-publish.journal.json`을 남기고 재시도를 거절합니다. `recover_first_publish(root, source_dir, jsonl, sqlite, manifest)`의 기본값은 **읽기 전용 dry-run**입니다. `apply=True`는 기록된 SHA의 부분 출력을 삭제하지 않고 `.law-recovery-*` 감사용 파일로 옮겨 검증합니다. 파일이 도중 교체되면 새 내용을 덮거나 삭제하지 않고 가능한 경우 원래 경로에 비파괴적으로 복원하며 journal을 보존합니다. 이전 버전의 잘린 journal은 출력 3종이 모두 없을 때만 격리할 수 있습니다. 감사 파일은 자동 삭제하지 않습니다. 기존 자료의 자동 정리는 하지 않습니다. 기존 고정 3종 파일은 개수·JSONL/SQLite parity·manifest 상태 검증을 통과해야 동결됩니다. `--limit` 및 명시적 빈 결과는 처음부터 immutable smoke 세대로만 만들며 고정 경로의 완전 기준선이 되지 않습니다.
