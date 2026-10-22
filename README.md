@@ -80,15 +80,32 @@ rg -n '제750조|제103조' upstreams/legalize-kr/kr/민법/법률.md
 git -C upstreams/legalize-kr log --oneline --max-count=5 -- kr/민법/법률.md
 ```
 
-### 2. korean-law-mcp CLI 확인
+### 2. 검토된 의존성 패치로 korean-law-mcp 실행
+
+원본 upstream SHA는 이력 재현용으로 유지합니다. 실행 환경은
+`runtime.lock.json`에 기록된 lock-only 보안 패치를 적용해 별도로 만듭니다.
+준비 스크립트는 원본 SHA·원본 lock·패치·결과 lock 해시를 확인하며,
+애플리케이션 소스 변경이나 기존 실행 폴더 덮어쓰기를 거부합니다.
 
 ```bash
-cd <repo>/upstreams/korean-law-mcp
-
+cd <repo>
+python3 scripts/prepare_runtime.py --destination .runtime/korean-law-mcp-security
+cd .runtime/korean-law-mcp-security
+npm ci --ignore-scripts
 npm run build
+npm audit
 node build/cli.js list --json
-node build/cli.js explain 민법 제1조
 ```
+
+2026-10-21 채택 검증: clean install/build, 알려진 npm 취약점 0건,
+CLI 93개 및 실제 stdio MCP initialize/list 17개 확인. 원본 테스트 43개와
+런타임 준비의 변조·원본 보존·덮어쓰기 방지 테스트 5개가 통과했습니다.
+기본 `scripts/verify.sh`는 macOS 임시 폴더의 `/var` 별칭을 물리 경로로
+정규화하며, exporter의 경로 안전 검사는 그대로 유지합니다.
+
+이는 오프라인 실행 환경 채택입니다. 실제 법제처 호출·인증·법령 최신성·
+데이터 재배포 라이선스·중앙 Knowledge 등록은 검증하지 않았습니다.
+기존 실행 환경과 원본 upstream은 보존되므로 이전 경로로 되돌릴 수 있습니다.
 
 실제 법제처 API 호출은 `LAW_OC`가 필요합니다.
 
@@ -100,7 +117,7 @@ node build/cli.js search_law --query 민법
 ### 3. MCP HTTP 서버 확인
 
 ```bash
-cd <repo>/upstreams/korean-law-mcp
+cd <repo>/.runtime/korean-law-mcp-security
 LAW_OC='발급받은-법제처-OC-키' node build/index.js --mode http --port 8765
 curl http://127.0.0.1:8765/health
 ```
@@ -146,6 +163,19 @@ curl http://127.0.0.1:8765/health
 - 첫 생성 이후 **기존 고정 경로 3개는 그대로 유지**하고, 새 세대는 불변 `.law-generations/`에 기록한 뒤 `.current.json` 포인터 하나를 교체합니다. 새 소비자는 `read_current_generation()`으로 포인터를 고정·검증해 읽어야 합니다. 고정 경로만 읽는 기존 소비자는 이전 완전 세대를 계속 읽지만 최신 세대로 자동 이동하지 않습니다. 여러 파일을 하나의 원자적 교체라고 주장하지 않습니다.
 - `--migration-report`는 `--previous-jsonl`을 반드시 요구하고, 기존 ID의 모호한 대응을 unresolved로 보고합니다. 실제 migration은 하지 않습니다.
 - 중앙 Knowledge v1은 현재 법령 `source_id`를 허용하지 않습니다. `scripts/reconcile_knowledge_contract.py`는 pinned schema 전체에 대한 offline dry-run을 수행하며 중앙 쓰기를 하지 않습니다.
+
+중앙의 새 Knowledge v2를 검토할 때만 schema 파일과 SHA-256을 **둘 다 명시**하여
+offline 검증할 수 있습니다. 기본 v1 fixture·과거 commit/hash는 그대로 유지하며
+자동 승격하지 않습니다. 다음 명령은 이미 만든 합성 export를 읽기만 합니다.
+
+```bash
+python3 scripts/reconcile_knowledge_contract.py <synthetic.jsonl> \
+  --schema '../fordongdorrong/05. Engineering/04. Data Knowledge/schemas/knowledge-document.v2.schema.json' \
+  --expected-schema-sha256 71f422c97491c6dc9ab99fa643d89ff1f83dbd36d96ab02f32a669310624731e
+```
+
+명시한 v2의 source enum 확장 외에 기존 제약이 달라지면 거부합니다. 이 검증은
+중앙 운영 import, 실제 법제처 API 호출·인증, 법령 최신성 검증을 수행하지 않습니다.
 
 세부 검증·잔여 gate는 `docs/completion-ledger.md` 및 `docs/fordongdorrong-integration.md`의 최신 절을 참조하십시오.
 

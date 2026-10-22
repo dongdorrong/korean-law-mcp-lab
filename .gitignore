@@ -1,5 +1,6 @@
 # Local upstream clones and generated dependency/build artifacts
 upstreams/
+.runtime/
 
 # Environment files with API keys
 .env
