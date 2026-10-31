@@ -118,8 +118,8 @@ node build/cli.js search_law --query 민법
 
 ```bash
 cd <repo>/.runtime/korean-law-mcp-security
-LAW_OC='발급받은-법제처-OC-키' node build/index.js --mode http --port 8765
-curl http://127.0.0.1:8765/health
+LAW_OC='발급받은-법제처-OC-키' node build/index.js --mode http --port 18765
+curl http://127.0.0.1:18765/health
 ```
 
 ## 문서

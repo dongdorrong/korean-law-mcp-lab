@@ -21,7 +21,7 @@
    - `law_title`, `law_type`, `article_no`, `enforcement_date`, `source_path` citation 강제
    - `legal_advice=false`를 system/policy guard에 반영
 3. `LAW_OC` 발급 후 live MCP smoke
-   - `node build/index.js --mode http --port 8765`
+   - `node build/index.js --mode http --port 18765`
    - `/health` 확인
    - 대표 질의 `search_law`, `verify_citations`, `impact_map` 확인
 4. 로컬 export와 live MCP 병합 전략

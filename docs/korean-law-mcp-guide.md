@@ -95,13 +95,13 @@ node build/cli.js 전세금 못 받았어
 ## HTTP MCP 서버 실습
 
 ```bash
-LAW_OC='발급받은-법제처-OC-키' node build/index.js --mode http --port 8765
+LAW_OC='발급받은-법제처-OC-키' node build/index.js --mode http --port 18765
 ```
 
 다른 터미널에서 확인합니다.
 
 ```bash
-curl -s http://127.0.0.1:8765/health
+curl -s http://127.0.0.1:18765/health
 ```
 
 검증된 응답:
@@ -159,7 +159,7 @@ CORS_ORIGIN 미설정 — 모든 도메인 허용 중. 프로덕션에서는 COR
 {
   "mcpServers": {
     "korean-law-http": {
-      "url": "http://127.0.0.1:8765/mcp"
+      "url": "http://127.0.0.1:18765/mcp"
     }
   }
 }
