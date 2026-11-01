@@ -7,6 +7,12 @@
       "commit": "874b58594654505fdc409fd42c02d100d84d51ce",
       "snapshot_source": "tracked pre-integration manifest (2026-06-27)",
       "license": "unverified; redistribution review required",
+      "license_evidence": {
+        "checked_on": "2026-11-01",
+        "readme_url": "https://github.com/legalize-kr/legalize-kr/blob/874b58594654505fdc409fd42c02d100d84d51ce/README.md",
+        "root_tree_url": "https://api.github.com/repos/legalize-kr/legalize-kr/git/trees/874b58594654505fdc409fd42c02d100d84d51ce",
+        "finding": "README claims government/public law text and MIT for structure/metadata; root listing contains README.md and kr only, with no standalone license file. Exact license scope and redistribution permission remain unverified."
+      },
       "sparse": ["README.md", "kr/민법/*", "kr/개인정보보호법/*", "kr/근로기준법/*"]
     },
     {
@@ -15,6 +21,13 @@
       "commit": "f71b28c992db7b1347b7cfb68695c38392339ef0",
       "snapshot_source": "tracked pre-integration manifest (2026-06-27)",
       "license": "MIT (LICENSE at pinned commit; redistribution still requires review)",
+      "version": "4.1.1",
+      "license_evidence": {
+        "checked_on": "2026-11-01",
+        "file_url": "https://github.com/chrisryugj/korean-law-mcp/blob/f71b28c992db7b1347b7cfb68695c38392339ef0/LICENSE",
+        "version_url": "https://github.com/chrisryugj/korean-law-mcp/blob/f71b28c992db7b1347b7cfb68695c38392339ef0/package.json",
+        "finding": "LICENSE file is MIT, copyright 2025 Chris. This software license does not validate law-data licensing or live API terms."
+      },
       "sparse": []
     }
   ]

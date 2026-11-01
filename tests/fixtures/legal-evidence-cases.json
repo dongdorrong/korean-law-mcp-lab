@@ -1,0 +1,39 @@
+{
+  "synthetic": true,
+  "as_of": "2026-11-01T00:00:00Z",
+  "stale_after_days": 30,
+  "body": "합성법 제1조: 시험용 근거.",
+  "metadata": {
+    "evidence_kind": "snapshot",
+    "law_title": "합성법",
+    "law_type": "법률",
+    "law_id": "000001",
+    "article_no": "제1조",
+    "section_identity": "본문",
+    "identity_strength": "official_law_id",
+    "source_path": "synthetic/법률.md",
+    "upstream_commit": null,
+    "observed_at": "2026-10-31T00:00:00Z",
+    "promulgation_date": "2026-01-01",
+    "enforcement_date": "2027-01-01"
+  },
+  "freshness_cases": [
+    {"observed_at": null, "expected": "unknown", "reason": "observed_at_missing"},
+    {"observed_at": "2026-11-02T00:00:00Z", "expected": "unknown", "reason": "observation_in_future"},
+    {"observed_at": "2026-10-02T00:00:00Z", "expected": "unknown", "reason": "within_observation_window_latestness_unverified"},
+    {"observed_at": "2026-10-01T23:59:59Z", "expected": "stale", "reason": "observation_age_exceeds_policy"}
+  ],
+  "conflicting_body": "내용이 다른 합성법 제1조 시험용 근거.",
+  "missing_law_id_cases": [
+    {"other_kind": "snapshot", "other_document_id": "synthetic/law/1", "expected": "conflicting"},
+    {"other_kind": "user_provided", "other_document_id": "synthetic/law/1", "expected": "unknown"},
+    {"other_kind": "snapshot", "other_document_id": "synthetic/law/2", "expected": "unknown"},
+    {"other_kind": "user_provided", "other_document_id": "synthetic/law/2", "expected": "unknown"}
+  ],
+  "expected_citation": {
+    "law_title": "합성법", "law_type": "법률", "law_id": "000001",
+    "article_no": "제1조", "section_identity": "본문", "source_path": "synthetic/법률.md",
+    "identity_strength": "official_law_id",
+    "uri": "https://example.invalid/synthetic-law", "document_id": "synthetic/law/1"
+  }
+}

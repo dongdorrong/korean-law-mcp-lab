@@ -8,6 +8,11 @@
 
 ## fordongdorrong 사전 연동
 
+현재 오프라인 후보 계약과 #1 항목별 근거는
+[`docs/promotion-gates-20261101.md`](docs/promotion-gates-20261101.md)를 참조합니다.
+`law_adapter/`는 snapshot·사용자 자료를 분리하는 쓰기 없는 dry-run 계약이며,
+실시간 요청에는 미검증 차단 상태를 반환합니다. 지원 승격은 owner 검토 전까지 보류합니다.
+
 `fordongdorrong` repository를 건드리지 않고, 이 랩 안에서 RAG/SQLite importer가 읽을 수 있는 산출물을 만듭니다. API 키 유무와 관계없이 동작합니다.
 
 ```bash

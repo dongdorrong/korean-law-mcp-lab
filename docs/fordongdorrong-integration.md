@@ -1,5 +1,9 @@
 # fordongdorrong Integration Contract
 
+현행 오프라인 후보의 종류·날짜·충돌·사람 검토·중앙 v2/SQLite 대조는
+[2026-11-01 승격 조건 점검](promotion-gates-20261101.md)을 우선 참조한다.
+아래 고정 출력과 이전 검증 이력은 보존하며 지원 승격·live 검증으로 해석하지 않는다.
+
 작성일: 2026-06-27
 
 이 문서는 `korean-law-mcp-lab`을 나중에 `fordongdorrong`의 법령 근거 백엔드로 붙이기 위한 사전 계약입니다. `fordongdorrong` repository는 이 작업에서 수정하지 않습니다.

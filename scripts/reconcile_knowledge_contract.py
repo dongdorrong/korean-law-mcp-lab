@@ -7,8 +7,10 @@ import json
 import os
 import re
 import stat
+import sqlite3
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
 FIXTURE = Path(__file__).resolve().parents[1] / "tests/fixtures"
 CONTRACT = FIXTURE / "central-knowledge-v1-contract.json"
@@ -100,8 +102,7 @@ def validate_document(doc: dict, schema: dict) -> list[str]:
     return errors
 
 
-def reconcile(jsonl: Path, contract: dict, *, schema_path: Path | None = None,
-              expected_schema_sha256: str | None = None) -> dict:
+def selected_schema(contract, schema_path, expected_schema_sha256):
     if (schema_path is None) != (expected_schema_sha256 is None):
         raise ValueError("Explicit schema path and expected SHA-256 must be supplied together")
     payload = SCHEMA.read_bytes()
@@ -111,6 +112,12 @@ def reconcile(jsonl: Path, contract: dict, *, schema_path: Path | None = None,
     digest = contract["schema_sha256"]
     if schema_path is not None:
         schema, digest = explicit_schema(schema_path, expected_schema_sha256, schema)
+    return schema, digest
+
+
+def reconcile(jsonl: Path, contract: dict, *, schema_path: Path | None = None,
+              expected_schema_sha256: str | None = None) -> dict:
+    schema, digest = selected_schema(contract, schema_path, expected_schema_sha256)
     violations = []
     count = 0
     for count, line in enumerate(jsonl.read_text(encoding="utf-8").splitlines(), 1):
@@ -128,18 +135,55 @@ def reconcile(jsonl: Path, contract: dict, *, schema_path: Path | None = None,
             "central_writes": False}
 
 
-def main() -> None:
+def reconcile_sqlite(sqlite_path: Path, jsonl: Path, contract: dict, **selection) -> dict:
+    """닫힌 export DB만 읽기 전용 검사. 중앙 DB/importer 호환을 주장하지 않는다."""
+    report = reconcile(jsonl, contract, **selection)
+    schema, _ = selected_schema(contract, selection.get("schema_path"), selection.get("expected_schema_sha256"))
+    report.update(sqlite_documents=0, jsonl_sqlite_parity=False)
+    columns = [key for key in schema["required"] if key != "metadata"] + ["metadata_json"]
+    docs = []
+    try:
+        # immutable avoids sidecar creation; caller must supply a closed export,
+        # never a live WAL database. mode=ro also forbids creating a missing DB.
+        with sqlite3.connect(f"file:{quote(str(sqlite_path.resolve()))}?mode=ro&immutable=1", uri=True) as conn:
+            conn.row_factory = sqlite3.Row
+            for number, row in enumerate(conn.execute("SELECT " + ", ".join(columns) + " FROM documents"), 1):
+                doc = dict(row)
+                if type(doc["indexable"]) is not int or doc["indexable"] not in (0, 1):
+                    raise ValueError("indexable must be SQLite integer 0 or 1")
+                doc["indexable"] = bool(doc["indexable"])
+                doc["metadata"] = json.loads(doc.pop("metadata_json"))
+                report["violations"].extend({"line": number, "code": "sqlite: " + code}
+                                            for code in validate_document(doc, schema))
+                docs.append(doc)
+        original = [json.loads(line) for line in jsonl.read_text(encoding="utf-8").splitlines()]
+        canonical = lambda items: sorted(json.dumps(d, sort_keys=True, ensure_ascii=False) for d in items)
+        report["sqlite_documents"] = len(docs)
+        report["jsonl_sqlite_parity"] = canonical(docs) == canonical(original)
+        if not report["jsonl_sqlite_parity"]:
+            report["violations"].append({"line": None, "code": "sqlite: JSONL parity mismatch"})
+    except (OSError, ValueError, TypeError, sqlite3.DatabaseError) as exc:
+        report["violations"].append({"line": None, "code": "sqlite: " + str(exc)})
+    report["compatible"] = not report["violations"]
+    return report
+
+
+def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("jsonl", type=Path)
     parser.add_argument("--schema", type=Path)
     parser.add_argument("--expected-schema-sha256")
+    parser.add_argument("--sqlite", type=Path, help="Read-only comparison of a closed local export DB with JSONL")
     args = parser.parse_args()
     if (args.schema is None) != (args.expected_schema_sha256 is None):
         parser.error("--schema and --expected-schema-sha256 must be supplied together")
-    print(json.dumps(reconcile(args.jsonl, json.loads(CONTRACT.read_text(encoding="utf-8")),
-                               schema_path=args.schema,
-                               expected_schema_sha256=args.expected_schema_sha256), indent=2))
+    contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+    selection = dict(schema_path=args.schema, expected_schema_sha256=args.expected_schema_sha256)
+    report = (reconcile_sqlite(args.sqlite, args.jsonl, contract, **selection) if args.sqlite else
+              reconcile(args.jsonl, contract, **selection))
+    print(json.dumps(report, indent=2))
+    return 0 if report["compatible"] else 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

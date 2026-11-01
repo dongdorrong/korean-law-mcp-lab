@@ -1,0 +1,8 @@
+{
+  "upstream_repository": "https://github.com/dongdorrong/fordongdorrong",
+  "upstream_commit": "96d02636a6132c4be05e7b49d43a9c78af210ad7",
+  "observed_on": "2026-11-01",
+  "schema_path": "05. Engineering/04. Data Knowledge/schemas/knowledge-document.v2.schema.json",
+  "schema_sha256": "71f422c97491c6dc9ab99fa643d89ff1f83dbd36d96ab02f32a669310624731e",
+  "selection": "explicit opt-in only; historical v1 default preserved"
+}
