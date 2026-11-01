@@ -2,10 +2,12 @@ import copy
 import hashlib
 import json
 import unittest
+from datetime import timedelta
 from pathlib import Path
 from unittest.mock import patch
 
 from law_adapter.dry_run import preview
+from scripts.export_fordongdorrong_backend import split_articles
 
 FIXTURE = Path(__file__).parent / "fixtures/legal-evidence-cases.json"
 
@@ -107,6 +109,79 @@ class DryRunAdapterTests(unittest.TestCase):
         self.doc["body"] += " changed"
         with self.assertRaisesRegex(ValueError, "hash mismatch"):
             self.run_preview(snapshot_documents=[self.doc])
+
+    def test_missing_official_id_compares_only_same_kind_and_document_id(self):
+        for law_id in (None, ""):
+            for case in self.case["missing_law_id_cases"]:
+                with self.subTest(law_id=law_id, case=case):
+                    first = copy.deepcopy(self.doc)
+                    first["metadata"]["law_id"] = law_id
+                    other = copy.deepcopy(first)
+                    other["document_id"] = case["other_document_id"]
+                    other["body"] = self.case["conflicting_body"]
+                    self.rehash(other)
+                    snapshots, users = [first], []
+                    (snapshots if case["other_kind"] == "snapshot" else users).append(other)
+                    result = self.run_preview(requested_kind="all_offline",
+                                              snapshot_documents=snapshots, user_documents=users)
+                    self.assertEqual(len(result["evidence"]), 2)
+                    self.assertEqual({i["freshness_status"] for i in result["evidence"]}, {case["expected"]})
+
+    def test_weak_section_identity_is_visible_even_when_content_changes_key(self):
+        documents = []
+        for text in ("이전 합성 근거.", "변경된 합성 근거."):
+            body = f"## 부칙\n##### 제1조 (시행일)\n{text}\n"
+            article = next(a for a in split_articles(body) if a.article_no == "제1조")
+            doc = copy.deepcopy(self.doc)
+            doc["body"] = article.body
+            doc["metadata"].update(section_identity=article.section_key,
+                                    identity_strength="section_content_weak")
+            self.rehash(doc)
+            documents.append(doc)
+        self.assertNotEqual(documents[0]["metadata"]["section_identity"],
+                            documents[1]["metadata"]["section_identity"])
+        result = self.run_preview(snapshot_documents=documents)
+        self.assertEqual(len(result["evidence"]), 2)
+        for item in result["evidence"]:
+            self.assertEqual(item["citation"]["identity_strength"], "section_content_weak")
+            self.assertEqual(item["freshness_status"], "unknown")
+        del self.doc["metadata"]["identity_strength"]
+        self.assertIsNone(self.run_preview(snapshot_documents=[self.doc])["evidence"][0]
+                          ["citation"]["identity_strength"])
+
+    def test_source_modified_at_requires_timezone_timestamp_or_null(self):
+        for value in ("어제", {}, "2026-11-01T00:00:00", "2026-02-30T00:00:00Z",
+                      "2026-11-01T00:00:00+24:00"):
+            for kind in ("snapshot", "user_provided"):
+                with self.subTest(value=value, kind=kind), self.assertRaises(ValueError):
+                    self.doc["metadata"]["source_modified_at"] = value
+                    self.run_preview(requested_kind=kind, **{
+                        "snapshot_documents" if kind == "snapshot" else "user_documents": [self.doc]})
+        for value in (None, "2026-10-01T12:00:00+09:00"):
+            self.doc["metadata"]["source_modified_at"] = value
+            self.assertEqual(self.run_preview(snapshot_documents=[self.doc])["evidence"][0]
+                             ["source_modified_at"], value)
+
+    def test_snapshot_commit_requires_full_hex_without_promoting_user_claims(self):
+        for value in ("claimed", "a" * 39, "g" * 40, "a" * 41, {}):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "upstream_commit"):
+                self.doc["metadata"]["upstream_commit"] = value
+                self.run_preview(snapshot_documents=[self.doc])
+        for value in (None, "abcdef0123" * 4, "ABCDEF0123" * 4):
+            self.doc["metadata"]["upstream_commit"] = value
+            self.assertEqual(self.run_preview(snapshot_documents=[self.doc])["evidence"][0]
+                             ["source"]["upstream_commit"], value)
+
+    def test_observation_policy_bounds_raise_valueerror_before_processing_evidence(self):
+        for value in (timedelta.max.days + 1, 10**10):
+            for documents in ([], [self.doc]):
+                with self.subTest(value=value, documents=bool(documents)), self.assertRaises(ValueError):
+                    preview(requested_kind="snapshot", as_of=self.case["as_of"],
+                            snapshot_documents=documents, stale_after_days=value)
+        for value in (0, timedelta.max.days):
+            result = preview(requested_kind="snapshot", as_of=self.case["as_of"],
+                             snapshot_documents=[self.doc], stale_after_days=value)
+            self.assertEqual(result["evidence"][0]["freshness_status"], "stale" if value == 0 else "unknown")
 
     def test_preview_has_no_io_and_explicit_empty_and_kind_selection(self):
         with patch("builtins.open", side_effect=AssertionError("file IO")), \

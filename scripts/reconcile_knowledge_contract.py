@@ -168,7 +168,7 @@ def reconcile_sqlite(sqlite_path: Path, jsonl: Path, contract: dict, **selection
     return report
 
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("jsonl", type=Path)
     parser.add_argument("--schema", type=Path)
@@ -182,7 +182,8 @@ def main() -> None:
     report = (reconcile_sqlite(args.sqlite, args.jsonl, contract, **selection) if args.sqlite else
               reconcile(args.jsonl, contract, **selection))
     print(json.dumps(report, indent=2))
+    return 0 if report["compatible"] else 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

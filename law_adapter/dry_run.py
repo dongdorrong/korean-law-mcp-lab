@@ -43,16 +43,24 @@ def _evidence(document, kind, as_of, stale_after_days):
         raise ValueError("snapshot input must explicitly identify snapshot provenance")
     # User materials never inherit live/snapshot trust labels from their metadata.
     citation = {key: meta.get(key) for key in (
-        "law_title", "law_type", "law_id", "article_no", "section_identity", "source_path")}
+        "law_title", "law_type", "law_id", "article_no", "section_identity", "source_path",
+        "identity_strength")}
     for key in ("law_title", "law_type", "article_no", "section_identity"):
         if not isinstance(citation[key], str) or not citation[key].strip():
             raise ValueError(f"citation {key}: nonempty string required")
-    for key in ("law_id", "source_path"):
+    for key in ("law_id", "source_path", "identity_strength"):
         if citation[key] is not None and not isinstance(citation[key], str):
             raise ValueError(f"citation {key}: string or null required")
     citation.update(uri=doc["uri"], document_id=doc["document_id"], revision=digest)
     promulgation = _date(meta.get("promulgation_date"))
     enforcement = _date(meta.get("enforcement_date"))
+    source_modified = meta.get("source_modified_at")
+    if source_modified is not None:
+        _timestamp(source_modified)
+    upstream_commit = meta.get("upstream_commit") if kind == "snapshot" else None
+    if upstream_commit is not None and (not isinstance(upstream_commit, str) or not re.fullmatch(
+            r"[a-fA-F0-9]{40}", upstream_commit)):
+        raise ValueError("upstream_commit: 40 hex characters or null required")
     observed = meta.get("observed_at")
     freshness, reason = "unknown", "no_observation_policy"
     if observed is None:
@@ -70,9 +78,9 @@ def _evidence(document, kind, as_of, stale_after_days):
         "evidence_kind": kind,
         "source": {"kind": "local_snapshot" if kind == "snapshot" else "user_supplied",
                    "reference": doc["uri"],
-                   "upstream_commit": meta.get("upstream_commit") if kind == "snapshot" else None},
+                   "upstream_commit": upstream_commit},
         "text": doc["body"], "citation": citation,
-        "observed_at": observed, "source_modified_at": meta.get("source_modified_at"),
+        "observed_at": observed, "source_modified_at": source_modified,
         "promulgation_date": promulgation, "enforcement_date": enforcement,
         "temporal_relation": "unknown" if enforcement is None else (
             "future_enforcement_date" if date.fromisoformat(enforcement) > _timestamp(as_of).astimezone(
@@ -96,8 +104,9 @@ def preview(*, requested_kind, as_of, snapshot_documents=(), user_documents=(), 
     if requested_kind not in KINDS | {"all_offline"}:
         raise ValueError("unsupported evidence kind")
     _timestamp(as_of)
-    if stale_after_days is not None and (type(stale_after_days) is not int or stale_after_days < 0):
-        raise ValueError("stale_after_days must be a nonnegative integer or null")
+    if stale_after_days is not None and (type(stale_after_days) is not int or
+                                       not 0 <= stale_after_days <= timedelta.max.days):
+        raise ValueError(f"stale_after_days must be an integer in 0..{timedelta.max.days} or null")
     response = {
         "contract": CONTRACT, "dry_run": True, "promotion_status": "deferred_owner_review",
         "requested_kind": requested_kind, "as_of": as_of,

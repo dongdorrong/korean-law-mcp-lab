@@ -1,6 +1,8 @@
 import hashlib
 import json
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -101,6 +103,29 @@ class SQLiteKnowledgeContractTests(unittest.TestCase):
         report = self.report(**self.selection)
         self.assertFalse(report["compatible"])
         self.assertTrue(any("tombstoned" in v["code"] for v in report["violations"]))
+
+    def test_cli_exit_status_matches_compatibility_for_jsonl_and_sqlite(self):
+        script = Path(__file__).resolve().parents[1] / "scripts/reconcile_knowledge_contract.py"
+        base = [sys.executable, str(script), str(self.jsonl)]
+        v2 = ["--schema", str(self.selection["schema_path"].resolve()),
+              "--expected-schema-sha256", self.v2["schema_sha256"]]
+
+        def check(args, compatible):
+            result = subprocess.run(base + args, capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0 if compatible else 1, result.stderr)
+            self.assertEqual(json.loads(result.stdout)["compatible"], compatible)
+            self.assertEqual(result.stderr, "")
+
+        check([], False)  # Historical v1 source gate must also fail in a shell.
+        check(v2, True)
+        sqlite_args = v2 + ["--sqlite", str(self.db)]
+        check(sqlite_args, True)
+        with sqlite3.connect(self.db) as conn:
+            conn.execute("UPDATE documents SET title='changed title'")
+        check(sqlite_args, False)  # Valid schema, broken parity.
+        with sqlite3.connect(self.db) as conn:
+            conn.execute("ALTER TABLE documents DROP COLUMN deleted_at")
+        check(sqlite_args, False)  # Legacy schema cannot silently pass.
 
 
 if __name__ == "__main__":

@@ -40,6 +40,8 @@ snapshot 출처 기록을 보존했다. `runtime.lock.json`은 별도로 해시�
 관측 시각, 공포일, 시행일, 최신성 상태, 법률 자문 아님, 사람 검토 요구가 있다.
 모르는 날짜는 null이며 다른 날짜나 현재 시각으로 채우지 않는다.
 기존 동결 출력에 새 표지가 없으면 새 계약에 자동으로 맞춘 것처럼 취급하지 않는다.
+인용의 `identity_strength`는 exporter의 식별자 강도 표지를 보존하며, 입력에 없으면 null이다.
+이 표지는 동일성·출처 검증 성공을 뜻하지 않는다.
 
 - `observed_at`: 해당 자료를 로컬에서 관측한 시각이다. exporter의 `updated_at`도 이 시각이다.
   live 호출 성공·최신성 확인 시각이 아니다. timezone이 포함된 시각만 허용한다.
@@ -48,6 +50,8 @@ snapshot 출처 기록을 보존했다. `runtime.lock.json`은 별도로 해시�
 - `enforcement_date`: 원자료에 적힌 시행일이다. 미래 시행이면 별도 표기하지만 현재 적용성은 판단하지 않는다.
   기준 시각을 한국(UTC+09) 날짜로 변환해 비교하므로 UTC 자정 경계와 혼동하지 않는다.
 - `source_modified_at`: 원본 frontmatter 주장이다. 관측 시각과 구분하고 최신성 검증 근거로 사용하지 않는다.
+  null 또는 timezone이 포함된 유효한 시각만 받는다. snapshot의 `upstream_commit`은 null 또는
+  40자리 hex만 허용한다. 형식 검사는 해당 커밋의 진위 검증을 대신하지 않는다.
 - `revision`: 내용 hash 변경이다. Git 커밋·내용 변경만으로 법률상 개정 또는 대체를 단정하지 않는다.
 - `amendment_status`, `supersession_status`, `legal_effect_status`: 현재 모두 `not_determined`다.
   새 버전 발견, 폐지 표기, 파일 부재로 이전 근거를 자동 삭제·대체하지 않는다.
@@ -57,6 +61,7 @@ snapshot 출처 기록을 보존했다. `runtime.lock.json`은 별도로 해시�
 
 어댑터의 상태는 `unknown / stale / conflicting`이다. 관측 기준일 `as_of`를 호출자가 명시한다.
 `stale_after_days=N`은 **관측 시각의 나이**가 N일을 초과할 때만 stale로 정하는 선택 정책이다.
+N은 0부터 999,999,999까지의 정수 또는 null이며 범위를 벗어나면 `ValueError`로 거절한다.
 N일과 같으면 stale이 아니지만 여전히 unknown이다. 기간이 짧아도 최신 법령이라는 상태는 만들지 않는다.
 정책 없음·관측 없음·미래 관측은 unknown이며 사유 코드를 반환한다. 잘못된 날짜·시간대·정책은 거절한다.
 
@@ -64,6 +69,9 @@ N일과 같으면 stale이 아니지만 여전히 unknown이다. 기간이 짧�
 `conflicting`을 우선하고 모든 근거를 보존한다. 날짜 순으로 승자를 고르지 않는다.
 공식 ID가 없으면 같은 종류의 같은 문서 ID 안에서만 비교한다. 제목만 같은 자료의 동일성은 미확정이다.
 개정 이력의 서로 다른 판본도 이 계약에서는 사람의 적용 시점 검토가 필요한 충돌 후보다.
+라벨 없는 부칙의 `identity_strength=section_content_weak`는 section 본문 hash에 의존한다.
+내용이 바뀌면 section 키도 달라져 충돌을 놓치고 unknown이 될 수 있다. `path_fallback_weak`도
+공식 ID가 없는 약한 식별자다. unknown을 출처 일치나 충돌 없음으로 해석하지 않고 사람이 원문을 비교한다.
 
 기존 exporter의 `observed_unverified / stale_by_explicit_policy / conflicting_source`는 과거 메타데이터
 어휘로 보존한다. 새 어댑터는 원래 상태를 최신성 증거로 신뢰하지 않고 위 정책으로 다시 분류한다.
@@ -85,6 +93,9 @@ N일과 같으면 stale이 아니지만 여전히 unknown이다. 기간이 짧�
 
 `reconcile_knowledge_contract.py --sqlite`는 닫힌 로컬 export DB만 `mode=ro&immutable=1`로 읽는다.
 live WAL DB에는 사용하지 않는다. 누락 열·잘못된 boolean·전체 필드 불일치를 거절한다.
+CLI는 보고서를 출력하고 적합이면 종료 0, 부적합이면 종료 1을 반환한다(JSONL 단독도 동일).
+여기서 전체 필드 parity는 JSONL과 `documents` 표의 문서 필드 비교다.
+`documents_fts` 검색 색인의 내용·정합성 검사는 포함하지 않는다.
 기존 동결 SQLite의 `deleted_at` 누락은 보고하며 자동 ALTER/마이그레이션하지 않는다.
 새 결과의 스키마 적합성은 중앙 import 성공·실행 guard 완성·법적 정확성을 뜻하지 않는다.
 
@@ -104,6 +115,9 @@ python3 scripts/reconcile_knowledge_contract.py <synthetic.jsonl> \
 ## 안전·재현 시험과 분리
 
 새 exporter 문서와 manifest, 어댑터 응답에 `legal_advice=false`, `human_review_required=true`를 기록한다.
+기존 동결 `exports/integration/korean-law-backend.manifest.json`에는 과거 8765 포트가 남아 있다.
+이 장비에서는 해당 주소를 호출하지 않는다(`AGENTS.md`). 새 합성 manifest만 18765를 사용하며
+동결 manifest를 실행 설정으로 사용하지 않는다.
 어댑터의 network/file/central write, filing/submission/account action capability는 모두 false다.
 어댑터는 메모리 자료만 받고 stdout·파일·네트워크 출력이나 subprocess 실행도 하지 않는다.
 exporter 자체는 별도의 명시적 로컬 파일 쓰기 명령이다. dry-run 어댑터와 혼동하지 않는다.

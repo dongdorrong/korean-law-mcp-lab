@@ -10,6 +10,7 @@
     "law_id": "000001",
     "article_no": "제1조",
     "section_identity": "본문",
+    "identity_strength": "official_law_id",
     "source_path": "synthetic/법률.md",
     "upstream_commit": null,
     "observed_at": "2026-10-31T00:00:00Z",
@@ -23,9 +24,16 @@
     {"observed_at": "2026-10-01T23:59:59Z", "expected": "stale", "reason": "observation_age_exceeds_policy"}
   ],
   "conflicting_body": "내용이 다른 합성법 제1조 시험용 근거.",
+  "missing_law_id_cases": [
+    {"other_kind": "snapshot", "other_document_id": "synthetic/law/1", "expected": "conflicting"},
+    {"other_kind": "user_provided", "other_document_id": "synthetic/law/1", "expected": "unknown"},
+    {"other_kind": "snapshot", "other_document_id": "synthetic/law/2", "expected": "unknown"},
+    {"other_kind": "user_provided", "other_document_id": "synthetic/law/2", "expected": "unknown"}
+  ],
   "expected_citation": {
     "law_title": "합성법", "law_type": "법률", "law_id": "000001",
     "article_no": "제1조", "section_identity": "본문", "source_path": "synthetic/법률.md",
+    "identity_strength": "official_law_id",
     "uri": "https://example.invalid/synthetic-law", "document_id": "synthetic/law/1"
   }
 }
