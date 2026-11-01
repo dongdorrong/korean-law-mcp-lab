@@ -494,6 +494,8 @@ e.safe_create_json(pathlib.Path(os.environ['JOURNAL']), {'schema': 1}, pathlib.P
             doc = next(iter(knowledge_documents(source.parent, root, "2026-10-15T00:00:00Z", None)))
             self.assertEqual("future_enforcement_date", doc["metadata"]["temporal_relation"])
             self.assertEqual("not_determined", doc["metadata"]["legal_effect_status"])
+            boundary = next(iter(knowledge_documents(source.parent, root, "2027-03-03T16:00:00Z", None)))
+            self.assertEqual("date_not_future", boundary["metadata"]["temporal_relation"])
             (source / "시행령.md").write_text(SAMPLE_LAW.replace("법령구분: 법률", "법령구분: 법률"), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "Duplicate"):
                 export_backend(root=root, source_dir=source.parent, jsonl_path=root / "out.jsonl",

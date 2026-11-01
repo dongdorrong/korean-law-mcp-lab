@@ -1,5 +1,10 @@
 # Repo-local completion ledger — 2026-10-15
 
+2026-11-01 추가 점검: 아래 표는 과거 기준선이다. 현행 오프라인 후보의 보완과 중앙 v2/SQLite
+대조 결과는 [승격 조건 점검](promotion-gates-20261101.md)을 참조한다. 중앙 v2 및 런타임 allowlist는
+이미 법령 source를 허용한다. 새 합성 출력은 v2 적합하며, 동결 SQLite의 `deleted_at` 누락은
+자동 이전하지 않는다. 실제 live/API·법적 최신성·라이선스 범위·지원 승격은 미해결이다.
+
 Baseline commit `8645d825f5b99349fedef12449772eb7e5bf70de`; baseline offline suite: 3 pass. `AUTO_REQUIRED` means required repo-local implementation, **not** live/central promotion. All paths below are repository-relative. This ledger is a per-item implementation record; it does not approve legal accuracy or central import. Synthetic tests only.
 
 | ID / source | Requirement | Current evidence at baseline | Classification | Intended change / final artifact | Test or acceptance | Status / blocker or decision |

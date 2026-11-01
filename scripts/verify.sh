@@ -10,12 +10,12 @@ export TMPDIR="$("$PYTHON" -c 'import pathlib, tempfile; print(pathlib.Path(temp
 "$PYTHON" -m unittest discover -s tests -v
 CACHE="$(mktemp -d)"
 trap 'rm -r "$CACHE"' EXIT
-PYTHONPYCACHEPREFIX="$CACHE" "$PYTHON" -m compileall -q scripts tests
+PYTHONPYCACHEPREFIX="$CACHE" "$PYTHON" -m compileall -q scripts law_adapter tests
 "$PYTHON" - "$ROOT" <<'PY'
 import json, tempfile, sys
 from pathlib import Path
 from scripts.export_fordongdorrong_backend import export_backend, verify_published
-from scripts.reconcile_knowledge_contract import reconcile, CONTRACT
+from scripts.reconcile_knowledge_contract import reconcile, reconcile_sqlite, CONTRACT
 with tempfile.TemporaryDirectory() as tmp:
     root = Path(tmp)
     source = root / 'kr' / 'synthetic'
@@ -27,4 +27,11 @@ with tempfile.TemporaryDirectory() as tmp:
     report = reconcile(paths[0], json.loads(CONTRACT.read_text(encoding='utf-8')))
     assert not report['compatible'] and all(v['code'] == 'source_id: invalid enum' for v in report['violations'])
     print('synthetic export: validated; central source_id gate: blocked as expected')
+    fixtures = Path(sys.argv[1]) / 'tests/fixtures'
+    v2 = json.loads((fixtures / 'central-knowledge-v2-contract.json').read_text())
+    report = reconcile_sqlite(paths[1], paths[0], json.loads(CONTRACT.read_text()),
+                              schema_path=fixtures / 'knowledge-document.v2.schema.json',
+                              expected_schema_sha256=v2['schema_sha256'])
+    assert report['compatible'] and report['jsonl_sqlite_parity'], report
+    print('explicit central v2: JSONL/SQLite parity validated offline; no central writes')
 PY

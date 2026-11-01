@@ -27,7 +27,7 @@ import shutil
 import uuid
 from urllib.parse import quote
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -453,7 +453,8 @@ def knowledge_document(law: LawSource, article: Article, generated_at: str, comm
     source_modified = date_to_iso(str(law.metadata.get("원본변경일") or ""))
     if enforcement is None:
         temporal_relation = "unknown"
-    elif enforcement[:10] > generated_at[:10]:
+    elif enforcement[:10] > datetime.fromisoformat(generated_at.replace("Z", "+00:00")).astimezone(
+            timezone(timedelta(hours=9))).date().isoformat():
         temporal_relation = "future_enforcement_date"
     else:
         temporal_relation = "date_not_future"
@@ -499,11 +500,16 @@ def knowledge_document(law: LawSource, article: Article, generated_at: str, comm
             "upstream_commit": commit,
             "verification_status": "unverified",
             "evidence_kind": "snapshot",
+            "live_verified": False,
+            "live_validation_status": "not_tested_owner_key_required",
             "freshness_status": classify_freshness(generated_at, source_modified),
             "temporal_relation": temporal_relation,
             "legal_effect_status": "not_determined",
             "metadata_source": "legalize-kr.git.markdown" if commit else "local_unverified_markdown",
             "legal_advice": False,
+            "human_review_required": True,
+            "amendment_status": "not_determined",
+            "supersession_status": "not_determined",
             "fordongdorrong_use_cases": [
                 "legal citation grounding",
                 "policy/compliance checklist context",
@@ -598,9 +604,9 @@ def build_manifest(
             },
             "http": {
                 "command": "node",
-                "args": [relative(mcp_build, root), "--mode", "http", "--port", "8765"],
-                "health": "http://127.0.0.1:8765/health",
-                "mcp": "http://127.0.0.1:8765/mcp",
+                "args": [relative(mcp_build, root), "--mode", "http", "--port", "18765"],
+                "health": "http://127.0.0.1:18765/health",
+                "mcp": "http://127.0.0.1:18765/mcp",
             },
             "cli": {
                 "command": "node",
@@ -614,6 +620,11 @@ def build_manifest(
         },
         "safety": {
             "legal_advice": False,
+            "human_review_required": True,
+            "filing_enabled": False,
+            "submission_enabled": False,
+            "account_actions_enabled": False,
+            "external_writes": False,
             "must_cite": ["law_title", "law_type", "article_no", "enforcement_date", "source_path"],
             "claim_boundary": "검색/근거 제공용 백엔드입니다. 실제 법률 판단·사건 대응은 최신 원문과 전문가 검토가 필요합니다.",
         },
@@ -629,6 +640,7 @@ def build_manifest(
                 "updated_at",
                 "visibility",
                 "lifecycle",
+                "deleted_at",
                 "indexable",
                 "metadata_json",
             ],
@@ -666,6 +678,7 @@ def write_sqlite(path: Path, documents: list[dict[str, Any]]) -> None:
               updated_at TEXT NOT NULL,
               visibility TEXT NOT NULL,
               lifecycle TEXT NOT NULL,
+              deleted_at TEXT,
               indexable INTEGER NOT NULL,
               metadata_json TEXT NOT NULL,
               PRIMARY KEY (source_id, document_id)
@@ -678,8 +691,8 @@ def write_sqlite(path: Path, documents: list[dict[str, Any]]) -> None:
             """
             INSERT INTO documents (
               source_id, document_id, title, body, uri, content_hash, created_at,
-              updated_at, visibility, lifecycle, indexable, metadata_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              updated_at, visibility, lifecycle, deleted_at, indexable, metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
@@ -693,6 +706,7 @@ def write_sqlite(path: Path, documents: list[dict[str, Any]]) -> None:
                     document["updated_at"],
                     document["visibility"],
                     document["lifecycle"],
+                    document["deleted_at"],
                     1 if document["indexable"] else 0,
                     json.dumps(document["metadata"], ensure_ascii=False, separators=(",", ":")),
                 )
